@@ -1,20 +1,16 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Response, Body
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
-from meta_service import sync_product_to_meta
-from fastapi import Request, Query, Response
+
 import models, schemas
-from database import engine, get_db
-from json import JSONDecodeError
-from whatsapp_service import send_whatsapp_message
-from fastapi.middleware.cors import CORSMiddleware
-import models
-from database import SessionLocal
+from database import engine, get_db, SessionLocal
 from meta_service import sync_product_to_meta
 from whatsapp_service import send_whatsapp_message, get_media_url
-from fastapi import Body
 
 app = FastAPI(title="Hojrat Bladi API", version="1.0.0")
+
+# تفعيل CORS للسماح بالاتصال من واجهة المتجر
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,20 +19,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# رمز التحقق الخاص بالـ Webhook
+VERIFY_TOKEN = "HOJRAT_BLADI_WEBHOOK_TOKEN_2026"
+
+# قائمة عبارات السلام والتحية
+GREETING_KEYWORDS = [
+    "السلام عليكم",
+    "سلام عليكم",
+    "السلام",
+    "سلام",
+    "مرحبا",
+    "صباح الخير",
+    "مساء الخير",
+    "salam",
+    "slm"
+]
+
+def check_greeting(text: str) -> bool:
+    """التحقق مما إذا كانت الرسالة تحتوي على أي عبارة سلام"""
+    clean_text = text.lower().strip()
+    return any(keyword in clean_text for keyword in GREETING_KEYWORDS)
 
 
 # --- Endpoints المصانع ---
-
-# رمز التحقق الخاص بك (اختر أي كلمة سرية وضِعها هنا وفي لوحة Meta)
-VERIFY_TOKEN = "HOJRAT_BLADI_WEBHOOK_TOKEN_2026"
-
-
 @app.post("/api/factories/", response_model=schemas.FactoryResponse, status_code=status.HTTP_201_CREATED)
 def create_factory(factory: schemas.FactoryCreate, db: Session = Depends(get_db)):
     db_factory = db.query(models.Factory).filter(models.Factory.phone_number == factory.phone_number).first()
     if db_factory:
         raise HTTPException(status_code=400, detail="رقم الهاتف مسجل بالفعل لمصنع آخر")
-    
     new_factory = models.Factory(**factory.dict())
     db.add(new_factory)
     db.commit()
@@ -47,20 +57,16 @@ def create_factory(factory: schemas.FactoryCreate, db: Session = Depends(get_db)
 def get_factories(db: Session = Depends(get_db)):
     return db.query(models.Factory).all()
 
-# --- Endpoints المنتجات (التي ستُغذى من البوت ومن واجهة Next.js) ---
 
+# --- Endpoints المنتجات ---
 @app.post("/api/products/", response_model=schemas.ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)):
-    # التأكد من وجود المصنع
     factory = db.query(models.Factory).filter(models.Factory.id == product.factory_id).first()
     if not factory:
         raise HTTPException(status_code=404, detail="المصنع غير موجود")
-    
-    # التأكد من عدم تكرار الـ SKU
     db_product = db.query(models.Product).filter(models.Product.sku == product.sku).first()
     if db_product:
         raise HTTPException(status_code=400, detail="رمز SKU مستخدم مسبقاً")
-
     new_product = models.Product(**product.dict())
     db.add(new_product)
     db.commit()
@@ -69,27 +75,21 @@ def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)
 
 @app.get("/api/products/", response_model=List[schemas.ProductResponse])
 def get_products(db: Session = Depends(get_db)):
-    """هذا الـ Endpoint سيعتمد عليه تطبيق Next.js لعرض التغذية البصرية (Feed)"""
     return db.query(models.Product).all()
 
 @app.post("/api/products/{product_id}/sync-meta")
 async def trigger_meta_sync(product_id: int, db: Session = Depends(get_db)):
-    """
-    مزامنة منتج معين مع Ktalog Meta يدوياً
-    """
     result = await sync_product_to_meta(product_id, db)
     return result
 
 
+# --- Webhook Endpoints ---
 @app.get("/webhook")
 async def verify_webhook(
     mode: str = Query(None, alias="hub.mode"),
     token: str = Query(None, alias="hub.verify_token"),
     challenge: str = Query(None, alias="hub.challenge")
 ):
-    """
-    Endpoint للتحقق التلقائي الذي تطلبه Meta عند ضبط الـ Webhook لأول مرة
-    """
     if mode and token:
         if mode == "subscribe" and token == VERIFY_TOKEN:
             print("WEBHOOK_VERIFIED")
@@ -99,11 +99,10 @@ async def verify_webhook(
     raise HTTPException(status_code=400, detail="Missing parameters")
 
 
-
 @app.post("/webhook")
 async def handle_whatsapp_messages(payload: dict = Body(...)):
     """
-    Endpoint لاستقبال رسائل الواتساب القادمة من أصحاب المصانع/الزبائن وتجربتها عبر Swagger
+    استقبال رسائل الواتساب والرد التلقائي وإضافة المنتجات
     """
     data = payload
     print("Received Webhook Event:", data)
@@ -113,7 +112,7 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
         
         if "messages" in entry:
             message = entry["messages"][0]
-            from_phone = message["from"]  # رقم المرسل
+            from_phone = message["from"]
             msg_type = message.get("type")
             
             db = SessionLocal()
@@ -131,10 +130,19 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                     )
                     return {"status": "unauthorized_factory"}
 
-                # 2. في حالة الرسائل النصية
+                # 2. معالجة الرسائل النصية
                 if msg_type == "text":
-                    text = message.get("text", {}).get("body", "").strip()
-                    if text in ["إضافة منتج", "اضافة منتج"]:
+                    raw_text = message.get("text", {}).get("body", "").strip()
+                    
+                    # التحقق من إلقاء السلام
+                    if check_greeting(raw_text):
+                        reply = (
+                            "وعليكم السلام ورحمة الله وبركاته 🌸\n"
+                            f"أهلاً بك مصنع ({factory.name}) في منصة حجرة بلادي 🏛️.\n\n"
+                            "أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
+                        )
+                    # أمر إضافة منتج
+                    elif "إضافة منتج" in raw_text or "اضافة منتج" in raw_text:
                         reply = (
                             f"أهلاً بك مصنع ({factory.name}) 🏛️\n\n"
                             "لإضافة منتج جديد، أرسل *صورة الحجر* واكتب في الشرح (Caption) التنسيق التالي:\n\n"
@@ -143,11 +151,11 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                             "حجر قالمة بيج - 3200 - STONE-GLM-01"
                         )
                     else:
-                        reply = "مرحباً بك في منصة حجرة بلادي 🏛️. أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
+                        reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
                     
                     await send_whatsapp_message(from_phone, reply)
 
-                # 3. في حالة إرسال صورة مع شرح (Caption)
+                # 3. معالجة إرسال صورة المنتج
                 elif msg_type == "image":
                     caption = message.get("image", {}).get("caption", "").strip()
                     media_id = message.get("image", {}).get("id")
@@ -155,13 +163,12 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                     if not caption or "-" not in caption:
                         await send_whatsapp_message(
                             from_phone,
-                            "⚠️ يرجى إرفاق تفاصيل المنتج مع الصورة بالتنسيق التالي:\n"
-                            "*اسم المنتج - السعر - رمز SKU*"
+                            "⚠️ يرجى كتابة تفاصيل المنتج مع الصورة مفصولة بـ (-) مثال:\n"
+                            "*حجر قالمة بيج - 3200 - STONE-01*"
                         )
                         return {"status": "invalid_format"}
 
-                    # تفكيك النص: الاسم - السعر - SKU
-                    parts = [p.strip() for p in caption.split("-")]
+                    parts = [p.strip() for p in caption.split("-") if p.strip()]
                     if len(parts) < 3:
                         await send_whatsapp_message(
                             from_phone,
@@ -169,27 +176,43 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                         )
                         return {"status": "missing_fields"}
 
-                    title = parts[0]
-                    try:
-                        price = float(parts[1])
-                    except ValueError:
-                        await send_whatsapp_message(from_phone, "⚠️ يرجى التأكد من كتابة السعر كأرقام فقط.")
-                        return {"status": "invalid_price"}
-                    
-                    sku = parts[2]
+                    # استخراج مرن للبيانات
+                    price = None
+                    sku = None
+                    title_parts = []
 
-                    # التحقق من عدم تكرار الـ SKU
+                    for part in parts:
+                        if price is None and (part.isdigit() or part.replace(".", "", 1).isdigit()):
+                            price = float(part)
+                        elif sku is None and any(c.isascii() and c.isalpha() for c in part):
+                            sku = part.upper()
+                        else:
+                            title_parts.append(part)
+
+                    if not title_parts:
+                        title_parts.append(parts[0])
+                    if not sku:
+                        sku = parts[-1].upper()
+                    if price is None:
+                        try:
+                            price = float(parts[1])
+                        except ValueError:
+                            price = 0.0
+
+                    title = " - ".join(title_parts)
+
+                    # فحص عدم تكرار الـ SKU
                     existing_product = db.query(models.Product).filter(models.Product.sku == sku).first()
                     if existing_product:
                         await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر.")
                         return {"status": "sku_exists"}
 
-                    # جلب رابط الصورة (أو استخدام صورة افتراضية)
-                    image_url = await get_media_url(media_id)
+                    # جلب رابط الصورة
+                    image_url = message.get("image", {}).get("url") or await get_media_url(media_id)
                     if not image_url:
                         image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
 
-                    # إنشاء المنتج في قاعدة البيانات
+                    # حفظ المنتج في قاعدة البيانات
                     new_product = models.Product(
                         sku=sku,
                         title=title,
@@ -206,7 +229,7 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                     db.commit()
                     db.refresh(new_product)
 
-                    # المزامنة مع Meta الكتالوج
+                    # المزامنة مع Meta Commerce
                     sync_res = await sync_product_to_meta(new_product.id, db)
                     
                     if sync_res.get("status") == "success":
@@ -221,7 +244,7 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                     else:
                         await send_whatsapp_message(
                             from_phone,
-                            f"✅ تم حفظ المنتج محلياً برقم ({new_product.id})، وجارٍ استكمال مزامنته مع الكتالوج."
+                            f"✅ تم حفظ المنتج محلياً برقم ({new_product.id})."
                         )
 
             finally:
