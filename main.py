@@ -8,6 +8,10 @@ from database import engine, get_db
 from json import JSONDecodeError
 from whatsapp_service import send_whatsapp_message
 from fastapi.middleware.cors import CORSMiddleware
+import models
+from database import SessionLocal
+from meta_service import sync_product_to_meta
+from whatsapp_service import send_whatsapp_message, get_media_url
 
 app = FastAPI(title="Hojrat Bladi API", version="1.0.0")
 app.add_middleware(
@@ -95,42 +99,133 @@ async def verify_webhook(
 
 
 
-
 @app.post("/webhook")
 async def handle_whatsapp_messages(request: Request):
-    """
-    Endpoint لاستقبال رسائل الواتساب القادمة من أصحاب المصانع/الزبائن
-    """
     try:
-        # قراءة البيانات مع حماية السيرفر من JSON الفارغ
         data = await request.json()
     except JSONDecodeError:
-        print("⚠️ Received empty or invalid JSON payload.")
         return {"status": "ignored", "reason": "empty_body"}
 
-    print("Received Webhook Event:", data)
-    
     try:
-        # استخراج تفاصيل الرسالة من هيكل payload الخاص بـ Meta
         entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
         
         if "messages" in entry:
             message = entry["messages"][0]
-            from_phone = message["from"]  # رقم صاحب المصنع أو الزبون
+            from_phone = message["from"]  # رقم المرسل
+            msg_type = message.get("type")
             
-            if message["type"] == "text":
-                incoming_text = message["text"]["body"].strip().lower()
-                
-                # الشجرة التفاعلية للبوت
-                if incoming_text == "إضافة منتج":
-                    reply = "أهلاً بك! يرجى إرسال صورة الحجر مرفقة بالسعر والاسم في رسالة واحدة."
-                else:
-                    reply = "مرحباً بك في منصة حجرة بلادي 🏛️. أرسل كلمة 'إضافة منتج' للبدء في رفع منتجاتك."
-                
-                # إرسال الرد التلقائي
-                await send_whatsapp_message(from_phone, reply)
-                
+            db = SessionLocal()
+            try:
+                # 1. التحقق من هوية المصنع
+                factory = db.query(models.Factory).filter(
+                    (models.Factory.phone_number == from_phone) | 
+                    (models.Factory.phone_number == f"+{from_phone}")
+                ).first()
+
+                if not factory:
+                    await send_whatsapp_message(
+                        from_phone,
+                        "⚠️ مرحباً بك! هذا الرقم غير مسجل كمصنع معتمد في منصة حجرة بلادي."
+                    )
+                    return {"status": "unauthorized_factory"}
+
+                # 2. في حالة الرسائل النصية
+                if msg_type == "text":
+                    text = message["text"]["body"].strip()
+                    if text in ["إضافة منتج", "اضافة منتج"]:
+                        reply = (
+                            f"أهلاً بك مصنع ({factory.name}) 🏛️\n\n"
+                            "لإضافة منتج جديد، أرسل *صورة الحجر* واكتب في الشرح (Caption) التنسيق التالي:\n\n"
+                            "*اسم المنتج - السعر - رمز SKU*\n\n"
+                            "📌 مثال:\n"
+                            "حجر قالمة بيج - 3200 - STONE-GLM-01"
+                        )
+                    else:
+                        reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتج جديد."
+                    
+                    await send_whatsapp_message(from_phone, reply)
+
+                # 3. في حالة إرسال صورة مع شرح (Caption)
+                elif msg_type == "image":
+                    caption = message.get("image", {}).get("caption", "").strip()
+                    media_id = message.get("image", {}).get("id")
+
+                    if not caption or "-" not in caption:
+                        await send_whatsapp_message(
+                            from_phone,
+                            "⚠️ يرجى إرفاق تفاصيل المنتج مع الصورة بالتنسيق التالي:\n"
+                            "*اسم المنتج - السعر - رمز SKU*"
+                        )
+                        return {"status": "invalid_format"}
+
+                    # تفكيك النص: الاسم - السعر - SKU
+                    parts = [p.strip() for p in caption.split("-")]
+                    if len(parts) < 3:
+                        await send_whatsapp_message(
+                            from_phone,
+                            "⚠️ بيانات ناقصة. تأكد من كتابة: *الاسم - السعر - رمز SKU*"
+                        )
+                        return {"status": "missing_fields"}
+
+                    title = parts[0]
+                    try:
+                        price = float(parts[1])
+                    except ValueError:
+                        await send_whatsapp_message(from_phone, "⚠️ يرجى التأكد من كتابة السعر كأرقام فقط.")
+                        return {"status": "invalid_price"}
+                    
+                    sku = parts[2]
+
+                    # التحقق من عدم تكرار الـ SKU
+                    existing_product = db.query(models.Product).filter(models.Product.sku == sku).first()
+                    if existing_product:
+                        await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر.")
+                        return {"status": "sku_exists"}
+
+                    # جلب رابط الصورة (أو رابط تجريبي إذا كنا في بيئة التطوير)
+                    image_url = await get_media_url(media_id)
+                    if not image_url:
+                        image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
+
+                    # إنشاء المنتج في قاعدة البيانات
+                    new_product = models.Product(
+                        sku=sku,
+                        title=title,
+                        description=f"{title} - توريد مباشر من مصنع {factory.name}",
+                        price=price,
+                        currency="DZD",
+                        availability=models.AvailabilityEnum.IN_STOCK,
+                        condition=models.ConditionEnum.NEW,
+                        brand="Hojrat Bladi",
+                        primary_media_url=image_url,
+                        factory_id=factory.id
+                    )
+                    db.add(new_product)
+                    db.commit()
+                    db.refresh(new_product)
+
+                    # المزامنة مع Meta الكتالوج
+                    sync_res = await sync_product_to_meta(new_product.id, db)
+                    
+                    if sync_res.get("status") == "success":
+                        await send_whatsapp_message(
+                            from_phone,
+                            f"✅ تم إضافة ومزامنة المنتج بنجاح!\n\n"
+                            f"📦 المنتج: {title}\n"
+                            f"💰 السعر: {price} دج\n"
+                            f"🏷️ الرمز: {sku}\n"
+                            f"🆔 معرّف ميتا: {new_product.meta_product_id}"
+                        )
+                    else:
+                        await send_whatsapp_message(
+                            from_phone,
+                            f"✅ تم حفظ المنتج محلياً برقم ({new_product.id})، وجارٍ استكمال مزامنته مع الكتالوج."
+                        )
+
+            finally:
+                db.close()
+
     except Exception as e:
-        print(f"Error processing webhook event: {e}")
-        
+        print(f"Error handling WhatsApp webhook: {e}")
+
     return {"status": "success"}
