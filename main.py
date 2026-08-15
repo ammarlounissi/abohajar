@@ -12,6 +12,7 @@ import models
 from database import SessionLocal
 from meta_service import sync_product_to_meta
 from whatsapp_service import send_whatsapp_message, get_media_url
+from fastapi import Body
 
 app = FastAPI(title="Hojrat Bladi API", version="1.0.0")
 app.add_middleware(
@@ -100,11 +101,12 @@ async def verify_webhook(
 
 
 @app.post("/webhook")
-async def handle_whatsapp_messages(request: Request):
-    try:
-        data = await request.json()
-    except JSONDecodeError:
-        return {"status": "ignored", "reason": "empty_body"}
+async def handle_whatsapp_messages(payload: dict = Body(...)):
+    """
+    Endpoint لاستقبال رسائل الواتساب القادمة من أصحاب المصانع/الزبائن وتجربتها عبر Swagger
+    """
+    data = payload
+    print("Received Webhook Event:", data)
 
     try:
         entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
@@ -131,7 +133,7 @@ async def handle_whatsapp_messages(request: Request):
 
                 # 2. في حالة الرسائل النصية
                 if msg_type == "text":
-                    text = message["text"]["body"].strip()
+                    text = message.get("text", {}).get("body", "").strip()
                     if text in ["إضافة منتج", "اضافة منتج"]:
                         reply = (
                             f"أهلاً بك مصنع ({factory.name}) 🏛️\n\n"
@@ -141,7 +143,7 @@ async def handle_whatsapp_messages(request: Request):
                             "حجر قالمة بيج - 3200 - STONE-GLM-01"
                         )
                     else:
-                        reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتج جديد."
+                        reply = "مرحباً بك في منصة حجرة بلادي 🏛️. أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
                     
                     await send_whatsapp_message(from_phone, reply)
 
@@ -182,7 +184,7 @@ async def handle_whatsapp_messages(request: Request):
                         await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر.")
                         return {"status": "sku_exists"}
 
-                    # جلب رابط الصورة (أو رابط تجريبي إذا كنا في بيئة التطوير)
+                    # جلب رابط الصورة (أو استخدام صورة افتراضية)
                     image_url = await get_media_url(media_id)
                     if not image_url:
                         image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
