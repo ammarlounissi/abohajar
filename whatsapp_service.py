@@ -10,7 +10,7 @@ WHATSAPP_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
 
 async def send_whatsapp_message(to_phone: str, text: str):
     headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Authorization": f"Bearer {WHATSAPP_TOKEN.strip() if WHATSAPP_TOKEN else ''}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -19,17 +19,21 @@ async def send_whatsapp_message(to_phone: str, text: str):
         "type": "text",
         "text": {"body": text}
     }
+    
+    print(f"🚀 Sending reply to {to_phone} via Phone ID: {PHONE_NUMBER_ID}...")
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(WHATSAPP_URL, json=payload, headers=headers)
-            return response.json()
+            res_json = response.json()
+            print(f"📡 Meta API Response [{response.status_code}]:", res_json)
+            return res_json
         except Exception as e:
-            print(f"Error sending WhatsApp message: {e}")
+            print(f"❌ Network Error sending WhatsApp message: {e}")
             return None
 
 async def get_media_url(media_id: str) -> str:
-    """جلب الرابط المباشر للوسائط من Meta"""
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN.strip() if WHATSAPP_TOKEN else ''}"}
     url = f"https://graph.facebook.com/v19.0/{media_id}"
     
     async with httpx.AsyncClient() as client:
@@ -38,5 +42,5 @@ async def get_media_url(media_id: str) -> str:
             if res.status_code == 200:
                 return res.json().get("url", "")
         except Exception as e:
-            print(f"Error getting media url: {e}")
+            print(f"❌ Error getting media url: {e}")
     return ""
