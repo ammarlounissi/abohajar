@@ -1,16 +1,22 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Query, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List
+import os
 
 import models, schemas
 from database import engine, get_db, SessionLocal
 from meta_service import sync_product_to_meta
-from whatsapp_service import send_whatsapp_message, get_media_url
+from whatsapp_service import send_whatsapp_message, download_and_save_whatsapp_media
 
 app = FastAPI(title="Hojrat Bladi API", version="1.0.0")
 
-# تفعيل CORS للسماح بالاتصال من واجهة المتجر
+# إتاحة الوصول للملفات الثابتة عبر الويب
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# تفعيل CORS للتطبيقات والواجهات الخارجية
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,7 +42,7 @@ GREETING_KEYWORDS = [
 ]
 
 def check_greeting(text: str) -> bool:
-    """التحقق مما إذا كانت الرسالة تحتوي على أي عبارة سلام"""
+    """التحقق مما إذا كانت الرسالة تحتوي على عبارة سلام"""
     clean_text = text.lower().strip()
     return any(keyword in clean_text for keyword in GREETING_KEYWORDS)
 
@@ -101,25 +107,23 @@ async def verify_webhook(
 
 @app.post("/webhook")
 async def handle_whatsapp_messages(payload: dict = Body(...)):
-    """
-    استقبال رسائل الواتساب والرد التلقائي وإضافة المنتجات
-    """
+    """استقبال رسائل الواتساب، حفظ الوسائط في مجلدات المصانع، وإضافة المنتجات"""
     data = payload
     print("Received Webhook Event:", data)
 
     try:
         entry = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
-        
+
         if "messages" in entry:
             message = entry["messages"][0]
             from_phone = message["from"]
             msg_type = message.get("type")
-            
+
             db = SessionLocal()
             try:
                 # 1. التحقق من هوية المصنع
                 factory = db.query(models.Factory).filter(
-                    (models.Factory.phone_number == from_phone) | 
+                    (models.Factory.phone_number == from_phone) |
                     (models.Factory.phone_number == f"+{from_phone}")
                 ).first()
 
@@ -133,15 +137,13 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                 # 2. معالجة الرسائل النصية
                 if msg_type == "text":
                     raw_text = message.get("text", {}).get("body", "").strip()
-                    
-                    # التحقق من إلقاء السلام
+
                     if check_greeting(raw_text):
                         reply = (
                             "وعليكم السلام ورحمة الله وبركاته 🌸\n"
                             f"أهلاً بك مصنع ({factory.name}) في منصة حجرة بلادي 🏛️.\n\n"
                             "أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
                         )
-                    # أمر إضافة منتج
                     elif "إضافة منتج" in raw_text or "اضافة منتج" in raw_text:
                         reply = (
                             f"أهلاً بك مصنع ({factory.name}) 🏛️\n\n"
@@ -152,10 +154,10 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                         )
                     else:
                         reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
-                    
+
                     await send_whatsapp_message(from_phone, reply)
 
-                # 3. معالجة إرسال صورة المنتج
+                # 3. معالجة إرسال الصور
                 elif msg_type == "image":
                     caption = message.get("image", {}).get("caption", "").strip()
                     media_id = message.get("image", {}).get("id")
@@ -176,7 +178,6 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                         )
                         return {"status": "missing_fields"}
 
-                    # استخراج مرن للبيانات
                     price = None
                     sku = None
                     title_parts = []
@@ -201,18 +202,18 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
 
                     title = " - ".join(title_parts)
 
-                    # فحص عدم تكرار الـ SKU
+                    # فحص تكرار الـ SKU
                     existing_product = db.query(models.Product).filter(models.Product.sku == sku).first()
                     if existing_product:
                         await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر.")
                         return {"status": "sku_exists"}
 
-                    # جلب رابط الصورة
-                    image_url = message.get("image", {}).get("url") or await get_media_url(media_id)
+                    # تحميل الصورة وحفظها داخل مجلد المصنع
+                    image_url = await download_and_save_whatsapp_media(media_id, factory_id=factory.id, media_type="image")
                     if not image_url:
                         image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
 
-                    # حفظ المنتج في قاعدة البيانات
+                    # إنشاء المنتج في قاعدة البيانات
                     new_product = models.Product(
                         sku=sku,
                         title=title,
@@ -231,7 +232,7 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
 
                     # المزامنة مع Meta Commerce
                     sync_res = await sync_product_to_meta(new_product.id, db)
-                    
+
                     if sync_res.get("status") == "success":
                         await send_whatsapp_message(
                             from_phone,
