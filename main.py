@@ -213,19 +213,18 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                     if not image_url:
                         image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
 
-                    # إنشاء المنتج في قاعدة البيانات
                     new_product = models.Product(
-                        sku=sku,
-                        title=title,
-                        description=f"{title} - توريد مباشر من مصنع {factory.name}",
-                        price=price,
-                        currency="DZD",
-                        availability=models.AvailabilityEnum.IN_STOCK,
-                        condition=models.ConditionEnum.NEW,
-                        brand="Hojrat Bladi",
-                        primary_media_url=image_url,
-                        factory_id=factory.id
-                    )
+    sku=sku,
+    title=title,
+    description=f"{title} - توريد مباشر من مصنع {factory.name}",
+    price=price,
+    currency="DZD",
+    availability=models.Availability.IN_STOCK,  # مطابق لتعريف models.py
+    condition="new",                             # نص مباشر حسب تعريف النموذج
+    brand="Hojrat Bladi",
+    primary_media_url=image_url,
+    factory_id=factory.id
+)
                     db.add(new_product)
                     db.commit()
                     db.refresh(new_product)
