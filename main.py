@@ -1,16 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Query, Response, Body
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Response, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List
 import os
+import io
+import pandas as pd
 
 import models, schemas
 from database import engine, get_db, SessionLocal
 from meta_service import sync_product_to_meta
 from whatsapp_service import send_whatsapp_message, download_and_save_whatsapp_media
 
-app = FastAPI(title="Hojrat Bladi API", version="1.0.0")
+app = FastAPI(title="Hojrat Bladi API", version="1.1.0")
 
 # إتاحة الوصول للملفات الثابتة عبر الويب
 os.makedirs("static", exist_ok=True)
@@ -65,14 +67,18 @@ def get_factories(db: Session = Depends(get_db)):
 
 
 # --- Endpoints المنتجات ---
+
+# 1. إضافة منتج واحد فردياً (API)
 @app.post("/api/products/", response_model=schemas.ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)):
     factory = db.query(models.Factory).filter(models.Factory.id == product.factory_id).first()
     if not factory:
         raise HTTPException(status_code=404, detail="المصنع غير موجود")
+    
     db_product = db.query(models.Product).filter(models.Product.sku == product.sku).first()
     if db_product:
         raise HTTPException(status_code=400, detail="رمز SKU مستخدم مسبقاً")
+    
     new_product = models.Product(**product.dict())
     db.add(new_product)
     db.commit()
@@ -87,6 +93,155 @@ def get_products(db: Session = Depends(get_db)):
 async def trigger_meta_sync(product_id: int, db: Session = Depends(get_db)):
     result = await sync_product_to_meta(product_id, db)
     return result
+
+
+# 2. رفع وتحديث منتجات كثيرة عبر ملف CSV (مع التحديث الذكي للحقول المتغيرة)
+@app.post("/api/products/upload-csv", status_code=status.HTTP_200_OK)
+async def upload_products_csv(
+    factory_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    رفع ملف CSV يحتوي على المنتجات.
+    - إضافة المنتجات الجديدة التي لا تملاك رمز SKU في النظام.
+    - تحديث المنتجات المتاحة مسبقاً في حالة تغير البيانات المتغيرة (مثل السعر، العنوان، الصورة).
+    """
+    factory = db.query(models.Factory).filter(models.Factory.id == factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="المصنع غير موجود")
+
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="يرجى رفع ملف بصيغة CSV فقط")
+
+    try:
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+
+        # توحيد أسماء الترويسات (حروف صغيرة وبدون فراغات)
+        df.columns = df.columns.str.strip().str.lower()
+
+        # الأعمدة الإلزامية الأساسية
+        required_columns = {"sku", "title", "price", "primary_media_url"}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"الملف ينقصه الأعمدة الإلزامية التالية: {', '.join(missing_columns)}"
+            )
+
+        created_count = 0
+        updated_count = 0
+        unchanged_count = 0
+        processed_products = []
+        errors = []
+
+        for index, row in df.iterrows():
+            row_num = index + 2  # رقم السطر مع ترويسة الجدول
+
+            sku = str(row["sku"]).strip().upper() if pd.notna(row.get("sku")) else None
+            title = str(row["title"]).strip() if pd.notna(row.get("title")) else None
+            primary_url = str(row["primary_media_url"]).strip() if pd.notna(row.get("primary_media_url")) else None
+
+            if not sku or not title or not primary_url:
+                errors.append(f"السطر {row_num}: أحد الحقول الإلزامية (sku, title, primary_media_url) مفقود")
+                continue
+
+            try:
+                price = float(row["price"])
+            except (ValueError, TypeError):
+                errors.append(f"السطر {row_num}: قيمة السعر غير صالحة ({row.get('price')})")
+                continue
+
+            # الحقول الاختيارية والافتراضية
+            description = str(row["description"]).strip() if "description" in df.columns and pd.notna(row["description"]) else f"{title} - توريد مباشر من مصنع {factory.name}"
+            currency = str(row["currency"]).strip() if "currency" in df.columns and pd.notna(row["currency"]) else "DZD"
+            condition = str(row["condition"]).strip() if "condition" in df.columns and pd.notna(row["condition"]) else "new"
+            brand = str(row["brand"]).strip() if "brand" in df.columns and pd.notna(row["brand"]) else "Hojrat Bladi"
+
+            additional_urls = []
+            if "additional_media_urls" in df.columns and pd.notna(row["additional_media_urls"]):
+                additional_urls = [u.strip() for u in str(row["additional_media_urls"]).split("|") if u.strip()]
+
+            # فحص وجود المنتج بناءً على SKU
+            existing_product = db.query(models.Product).filter(models.Product.sku == sku).first()
+
+            if existing_product:
+                # التحقق من وجود تغييرات في البيانات لتحديث المتغيرات فقط
+                has_changes = False
+
+                if existing_product.title != title:
+                    existing_product.title = title
+                    has_changes = True
+
+                if existing_product.price != price:
+                    existing_product.price = price
+                    has_changes = True
+
+                if existing_product.primary_media_url != primary_url:
+                    existing_product.primary_media_url = primary_url
+                    has_changes = True
+
+                if existing_product.description != description:
+                    existing_product.description = description
+                    has_changes = True
+
+                if existing_product.currency != currency:
+                    existing_product.currency = currency
+                    has_changes = True
+
+                if existing_product.additional_media_urls != additional_urls:
+                    existing_product.additional_media_urls = additional_urls
+                    has_changes = True
+
+                if has_changes:
+                    existing_product.sync_status = models.SyncStatus.PENDING
+                    updated_count += 1
+                    processed_products.append(existing_product)
+                else:
+                    unchanged_count += 1
+            else:
+                # إنشاء منتج جديد
+                new_product = models.Product(
+                    sku=sku,
+                    title=title,
+                    description=description,
+                    price=price,
+                    currency=currency,
+                    availability=models.Availability.IN_STOCK,
+                    condition=condition,
+                    brand=brand,
+                    primary_media_url=primary_url,
+                    additional_media_urls=additional_urls,
+                    factory_id=factory.id
+                )
+                db.add(new_product)
+                created_count += 1
+                processed_products.append(new_product)
+
+        # حفظ جميع العمليات في قاعدة البيانات
+        db.commit()
+
+        # إعادة المزامنة مع Meta للعلامات التي تمت إضافتها أو تحديثها
+        for product in processed_products:
+            db.refresh(product)
+            await sync_product_to_meta(product.id, db)
+
+        return {
+            "status": "success",
+            "message": f"تمت معالجة ملف CSV بنجاح.",
+            "summary": {
+                "total_created": created_count,
+                "total_updated": updated_count,
+                "total_unchanged": unchanged_count,
+                "total_errors": len(errors)
+            },
+            "errors": errors
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"حدث خطأ أثناء معالجة ملف CSV: {str(e)}")
 
 
 # --- Webhook Endpoints ---
@@ -107,7 +262,7 @@ async def verify_webhook(
 
 @app.post("/webhook")
 async def handle_whatsapp_messages(payload: dict = Body(...)):
-    """استقبال رسائل الواتساب، حفظ الوسائط في مجلدات المصانع، وإضافة المنتجات"""
+    """استقبال رسائل الواتساب، حفظ الوسائط وإضافة منتج فردي عبر الصورة"""
     data = payload
     print("Received Webhook Event:", data)
 
@@ -157,7 +312,7 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
 
                     await send_whatsapp_message(from_phone, reply)
 
-                # 3. معالجة إرسال الصور
+                # 3. معالجة رفع منتج واحد عبر الصورة (تنزيل الصورة وحفظها في مجلد المصنع)
                 elif msg_type == "image":
                     caption = message.get("image", {}).get("caption", "").strip()
                     media_id = message.get("image", {}).get("id")
@@ -208,23 +363,23 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
                         await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر.")
                         return {"status": "sku_exists"}
 
-                    # تحميل الصورة وحفظها داخل مجلد المصنع
+                    # تحميل الصورة وحفظها داخل مجلد المصنع محلياً
                     image_url = await download_and_save_whatsapp_media(media_id, factory_id=factory.id, media_type="image")
                     if not image_url:
                         image_url = "https://images.unsplash.com/photo-1590381105924-c72589b9ef3f"
 
                     new_product = models.Product(
-    sku=sku,
-    title=title,
-    description=f"{title} - توريد مباشر من مصنع {factory.name}",
-    price=price,
-    currency="DZD",
-    availability=models.Availability.IN_STOCK,  # مطابق لتعريف models.py
-    condition="new",                             # نص مباشر حسب تعريف النموذج
-    brand="Hojrat Bladi",
-    primary_media_url=image_url,
-    factory_id=factory.id
-)
+                        sku=sku,
+                        title=title,
+                        description=f"{title} - توريد مباشر من مصنع {factory.name}",
+                        price=price,
+                        currency="DZD",
+                        availability=models.Availability.IN_STOCK,
+                        condition="new",
+                        brand="Hojrat Bladi",
+                        primary_media_url=image_url,
+                        factory_id=factory.id
+                    )
                     db.add(new_product)
                     db.commit()
                     db.refresh(new_product)
