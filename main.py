@@ -409,3 +409,8 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
         print(f"Error handling WhatsApp webhook: {e}")
 
     return {"status": "success"}
+
+
+# ربط المجلد بالمصار /products
+app.mount("/products", StaticFiles(directory="products"), name="products")
+
