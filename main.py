@@ -414,3 +414,14 @@ async def handle_whatsapp_messages(payload: dict = Body(...)):
 # ربط المجلد بالمصار /products
 app.mount("/products", StaticFiles(directory="products"), name="products")
 
+
+@app.delete("/api/products/clear-all")
+def clear_all_products_endpoint(db: Session = Depends(get_db)):
+    try:
+        num_deleted = db.query(models.Product).delete(synchronize_session=False)
+        db.commit()
+        return {"status": "success", "message": f"تم حذف {num_deleted} منتج بنجاح."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"خطأ أثناء الحذف: {str(e)}")
+
