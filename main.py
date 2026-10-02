@@ -6,11 +6,15 @@ from typing import List
 import os
 import io
 import pandas as pd
+from dotenv import load_dotenv
 
 import models, schemas
 from database import engine, get_db, SessionLocal
 from meta_service import sync_product_to_meta
 from whatsapp_service import send_whatsapp_message, download_and_save_whatsapp_media
+
+# تحميل متغيرات البيئة من ملف .env
+load_dotenv()
 
 app = FastAPI(title="Hojrat Bladi API", version="1.1.0")
 
@@ -27,8 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# رمز التحقق الخاص بالـ Webhook
-VERIFY_TOKEN = "HOJRAT_BLADI_WEBHOOK_TOKEN_2026"
+# جلب رمز التحقق من ملف .env مباشرة بدون قيمة افتراضية
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
 # قائمة عبارات السلام والتحية
 GREETING_KEYWORDS = [
@@ -424,4 +428,3 @@ def clear_all_products_endpoint(db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"خطأ أثناء الحذف: {str(e)}")
-

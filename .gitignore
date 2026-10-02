@@ -1,5 +1,7 @@
 .env
 .env.local
+scan_structure.py
+architecture.json
 
 # Python Virtual Environment
 venv/
