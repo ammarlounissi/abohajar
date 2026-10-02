@@ -9,8 +9,8 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 # استيراد Base ونماذج البيانات لربطها بـ Alembic
-from database import Base
-import models 
+from app.core.database import Base
+from app import models 
 
 config = context.config
 
