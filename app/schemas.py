@@ -63,3 +63,20 @@ class ProductResponse(ProductBase):
     meta_product_id: Optional[str] = None
     sync_status: SyncStatus
     sync_error_message: Optional[str] = None
+
+
+class ProductPublicResponse(BaseModel):
+    """ما يراه الزوار فقط: بدون المصنع أو بيانات المزامنة مع ميتا."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    sku: str
+    title: str
+    description: Optional[str] = None
+    price: float
+    currency: str
+    availability: Availability
+    condition: str
+    brand: str
+    primary_media_url: str
+    additional_media_urls: List[str] = Field(default_factory=list)
