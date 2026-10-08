@@ -1,5 +1,6 @@
 """كل الإعدادات في مكان واحد. القيم السرية تأتي من ملف .env فقط."""
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -69,6 +70,14 @@ class Settings:
     # رقم (id) المصنع الذي تُنسب إليه المنتجات الجديدة عند الاستيراد التلقائي
     DEFAULT_FACTORY_ID = _get_int("DEFAULT_FACTORY_ID")
 
+    # أمر واتساب الإداري: من أرسل هذه الكلمة (نصاً كاملاً) إلى بوت المصنع يُنفَّذ الاستيراد التلقائي فوراً
+    # بلا تأكيد. فارغة = الميزة معطّلة. تُولَّد عشوائية (انظر .env.example) ولا تُستعمل في مكان آخر.
+    IMPORT_PASSWORD = _get("IMPORT_PASSWORD")
+    # اختياري: أرقام (بصيغة دولية، مفصولة بفواصل) المسموح لها بالأمر. فارغ = يكفي صحة الكلمة.
+    ADMIN_PHONE_NUMBERS = [
+        d for d in (re.sub(r"\D", "", n) for n in _get("ADMIN_PHONE_NUMBERS").split(",")) if d
+    ]
+
     # المجلدات
     STATIC_DIR = BASE_DIR / "static"
     UPLOADS_DIR = STATIC_DIR / "uploads" / "factories"   # قديم: لم يعد يُستعمل لصور المنتجات
@@ -99,6 +108,9 @@ class Settings:
             raise RuntimeError(f"MEDIA_ROOT غير موجود أو ليس مجلداً: {self.MEDIA_ROOT}")
         if not os.access(self.MEDIA_ROOT, os.W_OK | os.X_OK):
             raise RuntimeError(f"لا توجد صلاحية كتابة على MEDIA_ROOT: {self.MEDIA_ROOT}")
+        # الكلمة تعمل من أي رقم، فالقصيرة أو المعتادة خطر حقيقي
+        if self.IMPORT_PASSWORD and len(self.IMPORT_PASSWORD) < 12:
+            raise RuntimeError("IMPORT_PASSWORD قصيرة: يجب ألا تقل عن 12 حرفاً")
 
 
 settings = Settings()

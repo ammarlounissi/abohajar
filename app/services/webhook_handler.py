@@ -1,4 +1,5 @@
 """معالجة رسائل واتساب الواردة من المصانع (تعمل في الخلفية بعد الرد على ميتا)."""
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
@@ -11,6 +12,9 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.core.database import SessionLocal
 from app.services import media
+from app.services.admin_command import is_import_command
+from app.services.import_report import ImportConfigError, format_report
+from app.services.media_import import run_import, sync_touched
 from app.services.meta import sync_product_to_meta
 from app.services.products import SkuOwnershipError, parse_caption, upsert_product
 from app.services.whatsapp import (
@@ -30,6 +34,9 @@ PENDING_TTL = timedelta(hours=24)
 YES_WORDS = {"نعم", "اي", "أي", "yes", "oui", "ok"}
 NO_WORDS = {"لا", "no", "non"}
 _BUTTON_ID = re.compile(r"upd:(yes|no):(\d+)")
+
+# يمنع تشغيل استيرادين معاً (ضغط مزدوج أو إعادة إرسال)
+_import_lock = asyncio.Lock()
 
 SKU_HELP = "رمز المنتج حروف لاتينية كبيرة متبوعة بأرقام فقط، مثل B001 أو PTK012."
 
@@ -90,6 +97,12 @@ async def _process_message(db: Session, message: dict) -> None:
         logger.info("Duplicate message ignored: %s", message_id)
         return
 
+    # أمر المدير يُفحص قبل البحث عن المصنع: رقم المدير ليس بالضرورة مصنعاً
+    if is_import_command(from_phone, message):
+        logger.info("Import command received from %s", _mask(from_phone))
+        await _run_import_command(from_phone)
+        return
+
     factory = _find_factory(db, from_phone)
     if not factory:
         logger.warning("Ignoring message from unregistered number %s", _mask(from_phone))
@@ -136,6 +149,39 @@ async def _handle_text(db: Session, factory: models.Factory, from_phone: str, me
         reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
 
     await send_whatsapp_message(from_phone, reply)
+
+
+async def _run_import_command(from_phone: str) -> None:
+    """يشغّل الاستيراد التلقائي مباشرة (كتابة + مزامنة ميتا) ويرسل ملخصاً. لا نسجّل نص الرسالة أبداً."""
+    if _import_lock.locked():
+        await send_whatsapp_message(from_phone, "⏳ عملية استيراد جارية الآن، انتظر انتهاءها.")
+        return
+    async with _import_lock:
+        await send_whatsapp_message(from_phone, "⏳ بدأ الاستيراد من مجلد الصور...")
+        try:
+            # الفحص يقرأ ملفات كثيرة، فنشغّله في خيط منفصل كي لا يتجمد البوت
+            report = await asyncio.to_thread(run_import, apply=True)
+        except ImportConfigError as exc:
+            await send_whatsapp_message(from_phone, f"❌ {exc}")
+            return
+        except Exception:
+            logger.exception("Import command failed")
+            await send_whatsapp_message(from_phone, "❌ فشل الاستيراد ولم تُكتب أي بيانات. راجع سجل الخادم.")
+            return
+
+        text = format_report(report, limit=5)
+        if report.touched_ids:
+            await send_whatsapp_message(
+                from_phone, f"✅ كُتب {len(report.touched_ids)} منتجاً. 🔄 جارٍ المزامنة مع ميتا..."
+            )
+            try:
+                failed = await sync_touched(report.touched_ids)
+                text += f"\n\n🔄 مزامنة ميتا: نجحت {len(report.touched_ids) - failed}، فشلت {failed}"
+            except Exception:
+                logger.exception("Meta sync after import failed")
+                text += "\n\n⚠️ تعذرت مزامنة ميتا، المنتجات محفوظة وحالتها pending."
+        # حد رسالة واتساب النصية 4096 حرفاً
+        await send_whatsapp_message(from_phone, text[:3800])
 
 
 def _yes_no(text: str) -> Optional[bool]:
