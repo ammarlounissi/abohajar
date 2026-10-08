@@ -3,8 +3,9 @@
 البنية:  {MEDIA_ROOT}/{الفئة}/{SKU}/{الرقم}.{الامتداد}      مثل  B/B001/1.jpg
 الفئة = الحروف في بداية الـ SKU (B001 -> B، PTK012 -> PTK).
 
-الرابط العام بلا امتداد (…/products/B/B001/1) وتحلّه Nginx بـ try_files،
-ولا يجوز تغيير شكله لأن كتالوج ميتا يعتمد عليه.
+الرابط العام قصير:  {IMAGE_BASE_URL}/{SKU}/{الرقم}.{الامتداد}     مثل  https://hadjretbladi.com/B001/22.jpg
+(Nginx يحوّله إلى {MEDIA_ROOT}/B/B001/22.jpg). شكل الرابط يُبنى في دالة واحدة هي public_image_url،
+وكتالوج ميتا يعتمد عليه، فلا يُبنى في مكان آخر.
 """
 import logging
 import os
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # fullmatch وليس match: لأن $ تقبل سطراً جديداً في النهاية
 _SKU_PATH_RE = re.compile(r"([A-Z]+)[0-9]+")
 
-# نفس الامتدادات التي تجربها Nginx في try_files
+# الامتدادات المقبولة كصور
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 MAIN_IMAGE_INDEX = 1
 
@@ -52,8 +53,20 @@ def product_dir(sku: str) -> Path:
     return path
 
 
-def public_image_url(sku: str, index: int = MAIN_IMAGE_INDEX) -> str:
-    return f"{settings.IMAGE_BASE_URL}/{category_of(sku)}/{sku}/{index}"
+def public_image_url(sku: str, ext: str, index: int = MAIN_IMAGE_INDEX) -> str:
+    """ext بنقطة كما في الملف الفعلي، مثل '.jpg'."""
+    return f"{settings.IMAGE_BASE_URL}/{sku}/{index}{ext}"
+
+
+def existing_image_ext(sku: str, index: int = MAIN_IMAGE_INDEX) -> Optional[str]:
+    """امتداد الصورة الموجودة فعلاً على القرص (كما كُتب في اسم الملف)، أو None."""
+    folder = product_dir(sku)
+    if not folder.is_dir():
+        return None
+    for f in sorted(folder.iterdir()):
+        if f.is_file() and f.stem == str(index) and f.suffix.lower() in IMAGE_EXTENSIONS:
+            return f.suffix
+    return None
 
 
 def _is_real_file(path: Path) -> bool:
@@ -82,12 +95,12 @@ def _archive_existing(sku: str, folder: Path, index: int) -> bool:
     """ننقل الصورة القديمة إلى MEDIA_BACKUP_DIR بدل حذفها."""
     archived = False
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    for ext in IMAGE_EXTENSIONS:
-        old = folder / f"{index}{ext}"
-        if old.is_file():
+    for old in sorted(folder.iterdir()):
+        # بغض النظر عن حالة الأحرف (1.JPG) كي لا يبقى ملفان لنفس الرقم
+        if old.is_file() and old.stem == str(index) and old.suffix.lower() in IMAGE_EXTENSIONS:
             backup_dir = settings.MEDIA_BACKUP_DIR / sku
             backup_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(old), str(backup_dir / f"{index}_{stamp}{ext}"))
+            shutil.move(str(old), str(backup_dir / f"{index}_{stamp}{old.suffix}"))
             archived = True
     return archived
 

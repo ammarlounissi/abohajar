@@ -13,6 +13,16 @@ def _get(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _get_int(name: str):
+    """رقم صحيح اختياري من .env؛ يرجع None إن كان فارغاً، ويتوقف برسالة واضحة إن لم يكن رقماً."""
+    value = _get(name)
+    if not value:
+        return None
+    if not value.isascii() or not value.isdigit():
+        raise RuntimeError(f"{name} في .env يجب أن يكون رقماً صحيحاً، وجدنا: {value!r}")
+    return int(value)
+
+
 class Settings:
     DATABASE_URL = _get("DATABASE_URL", f"sqlite:///{BASE_DIR / 'hojrat_bladi.db'}")
 
@@ -38,7 +48,7 @@ class Settings:
         "PRODUCT_LINK_TEMPLATE", "https://store.hadjretbladi.com/p/{sku}"
     )
 
-    # قاعدة روابط صور المنتجات: {IMAGE_BASE_URL}/{الفئة}/{SKU}/1.jpg
+    # قاعدة روابط صور المنتجات: {IMAGE_BASE_URL}/{SKU}/{الرقم}.{الامتداد}  (مثل https://hadjretbladi.com/B001/1.jpg)
     IMAGE_BASE_URL = _get("IMAGE_BASE_URL").rstrip("/")
 
     # مجلد صور المنتجات: مستقل عن كود المشروع، وتخدمه Nginx مباشرة.
@@ -49,6 +59,15 @@ class Settings:
         Path(_get("MEDIA_BACKUP_DIR")).expanduser()
         if _get("MEDIA_BACKUP_DIR") else BASE_DIR / "media_backup"
     )
+
+    # ملف CSV (الأعمدة sku,title,price) الذي يقرأه سكريبت الاستيراد التلقائي.
+    # إن تُرك فارغاً يُبحث عنه في MEDIA_ROOT/products.csv. الأفضل وضعه خارج MEDIA_ROOT
+    # لأن Nginx يخدم كل ما بداخله علناً.
+    PRODUCTS_CSV_PATH = (
+        Path(_get("PRODUCTS_CSV_PATH")).expanduser() if _get("PRODUCTS_CSV_PATH") else None
+    )
+    # رقم (id) المصنع الذي تُنسب إليه المنتجات الجديدة عند الاستيراد التلقائي
+    DEFAULT_FACTORY_ID = _get_int("DEFAULT_FACTORY_ID")
 
     # المجلدات
     STATIC_DIR = BASE_DIR / "static"

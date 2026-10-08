@@ -282,9 +282,16 @@ async def _store_product(
         await send_whatsapp_message(from_phone, "⚠️ تعذر تحميل الصورة، يرجى إعادة إرسالها.")
         return
 
+    # الرابط يحمل الامتداد الفعلي، فنحدده من محتوى الصورة قبل بنائه
+    ext = media.detect_image_extension(content)
+    if ext is None:
+        await send_whatsapp_message(
+            from_phone, "⚠️ الملف ليس صورة مدعومة. أرسل صورة بصيغة JPEG أو PNG أو WebP."
+        )
+        return
     fields = {
         "sku": sku, "title": title, "price": price,
-        "primary_media_url": media.public_image_url(sku),
+        "primary_media_url": media.public_image_url(sku, ext),
     }
     try:
         product, outcome = upsert_product(db, factory, fields)

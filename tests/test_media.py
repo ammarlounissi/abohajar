@@ -22,7 +22,7 @@ class MediaTests(unittest.TestCase):
         patches = [
             mock.patch.object(settings, "MEDIA_ROOT", self.root),
             mock.patch.object(settings, "MEDIA_BACKUP_DIR", self.backup),
-            mock.patch.object(settings, "IMAGE_BASE_URL", "https://hadjretbladi.com/products"),
+            mock.patch.object(settings, "IMAGE_BASE_URL", "https://hadjretbladi.com"),
         ]
         for p in patches:
             p.start()
@@ -45,8 +45,15 @@ class MediaTests(unittest.TestCase):
     def test_product_dir_layout(self):
         self.assertEqual(media.product_dir("B001"), self.root.resolve() / "B" / "B001")
 
-    def test_public_url_has_no_extension(self):
-        self.assertEqual(media.public_image_url("B001"), "https://hadjretbladi.com/products/B/B001/1")
+    def test_public_url_is_short_with_real_extension(self):
+        self.assertEqual(media.public_image_url("B001", ".jpg"), "https://hadjretbladi.com/B001/1.jpg")
+        self.assertEqual(media.public_image_url("B010", ".png", 22), "https://hadjretbladi.com/B010/22.png")
+
+    def test_existing_image_ext(self):
+        self.assertIsNone(media.existing_image_ext("B001"))
+        media.save_main_image("B001", PNG)
+        self.assertEqual(media.existing_image_ext("B001"), ".png")
+        self.assertIsNone(media.existing_image_ext("B001", 2))
 
     # --- الكشف عن نوع الصورة ---
     def test_detect_extension_from_content(self):
@@ -78,6 +85,14 @@ class MediaTests(unittest.TestCase):
         archived = list((self.backup / "B001").iterdir())
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0].read_bytes(), JPEG)
+
+    def test_replace_archives_uppercase_extension_too(self):
+        folder = self.root / "B" / "B001"
+        folder.mkdir(parents=True)
+        (folder / "1.JPG").write_bytes(JPEG)
+        media.save_main_image("B001", PNG)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["1.png"])
+        self.assertEqual(len(list((self.backup / "B001").iterdir())), 1)
 
     def test_replace_keeps_other_files(self):
         media.save_main_image("B001", JPEG)

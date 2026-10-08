@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.config import settings
+from app.services import media
 
 # فاصل يجب أن يحيط به مسافات (أو سطر جديد) حتى لا ينكسر SKU مثل STONE-GLM-01
 _CAPTION_SPLIT = re.compile(r"\s+[-–—|]\s+|\n")
@@ -35,12 +36,12 @@ def parse_caption(caption: str) -> Optional[Tuple[str, float, str]]:
 
 
 def build_image_url(sku: str) -> str:
-    """يبني رابط الصورة الرئيسية من الـ SKU: {IMAGE_BASE_URL}/{الفئة}/{SKU}/1  (بلا امتداد، تحلّه Nginx)
-    الفئة هي الحروف في بداية الرمز (B001 -> B، PTK012 -> PTK)."""
-    match = re.match(r"[A-Z]+", sku)
-    if not settings.IMAGE_BASE_URL or not match:
+    """رابط الصورة الرئيسية من الـ SKU: {IMAGE_BASE_URL}/{SKU}/1.{الامتداد الفعلي}.
+    إن لم نجد الملف على القرص نفترض .jpg."""
+    if not settings.IMAGE_BASE_URL:
         return ""
-    return f"{settings.IMAGE_BASE_URL}/{match.group(0)}/{sku}/1"
+    ext = (media.existing_image_ext(sku) if media.is_valid_media_sku(sku) else None) or ".jpg"
+    return media.public_image_url(sku, ext)
 
 
 def default_description(title: str, factory: models.Factory) -> str:
