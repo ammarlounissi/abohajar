@@ -19,6 +19,9 @@ __pycache__/
 *.db
 *.sqlite3
 
+# Image backups (replaced product images)
+media_backup/
+
 # Log files
 *.log
 

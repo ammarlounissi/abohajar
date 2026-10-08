@@ -1,6 +1,8 @@
 """معالجة رسائل واتساب الواردة من المصانع (تعمل في الخلفية بعد الرد على ميتا)."""
 import logging
 import re
+from datetime import datetime, timedelta
+from typing import Optional
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
@@ -8,9 +10,12 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.database import SessionLocal
+from app.services import media
 from app.services.meta import sync_product_to_meta
-from app.services.products import parse_caption, upsert_product
-from app.services.whatsapp import download_and_save_whatsapp_media, send_whatsapp_message
+from app.services.products import SkuOwnershipError, parse_caption, upsert_product
+from app.services.whatsapp import (
+    download_whatsapp_media, send_whatsapp_buttons, send_whatsapp_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +23,15 @@ GREETING_KEYWORDS = [
     "السلام عليكم", "سلام عليكم", "السلام", "سلام", "مرحبا",
     "صباح الخير", "مساء الخير", "salam", "slm",
 ]
+
+
+# مهلة جواب المصنع على سؤال "هل تريد التحديث؟"
+PENDING_TTL = timedelta(hours=24)
+YES_WORDS = {"نعم", "اي", "أي", "yes", "oui", "ok"}
+NO_WORDS = {"لا", "no", "non"}
+_BUTTON_ID = re.compile(r"upd:(yes|no):(\d+)")
+
+SKU_HELP = "رمز المنتج حروف لاتينية كبيرة متبوعة بأرقام فقط، مثل B001 أو PTK012."
 
 
 def check_greeting(text: str) -> bool:
@@ -84,13 +98,23 @@ async def _process_message(db: Session, message: dict) -> None:
     logger.info("Message %s (%s) from factory %s", message_id, msg_type, factory.id)
 
     if msg_type == "text":
-        await _handle_text(factory, from_phone, message)
+        await _handle_text(db, factory, from_phone, message)
     elif msg_type == "image":
         await _handle_image(db, factory, from_phone, message)
+    elif msg_type == "interactive":
+        await _handle_interactive(db, factory, from_phone, message)
 
 
-async def _handle_text(factory: models.Factory, from_phone: str, message: dict) -> None:
+async def _handle_text(db: Session, factory: models.Factory, from_phone: str, message: dict) -> None:
     raw_text = message.get("text", {}).get("body", "").strip()
+
+    # جواب نعم/لا نصاً (بديل عن الأزرار) يخص آخر طلب معلّق لهذا المصنع
+    answer = _yes_no(raw_text)
+    if answer is not None:
+        pending = _latest_pending(db, factory)
+        if pending:
+            await _resolve_pending(db, factory, from_phone, pending, accept=answer)
+            return
 
     if check_greeting(raw_text):
         reply = (
@@ -104,13 +128,35 @@ async def _handle_text(factory: models.Factory, from_phone: str, message: dict) 
             "لإضافة منتج جديد، أرسل *صورة الحجر* واكتب في الشرح (Caption) التنسيق التالي:\n\n"
             "*اسم المنتج - السعر - رمز SKU*\n\n"
             "📌 مثال:\n"
-            "حجر قالمة بيج - 3200 - STONE-GLM-01\n\n"
-            "(ضع مسافة قبل الشرطة وبعدها)"
+            "حجر قالمة بيج - 3200 - B001\n\n"
+            "(ضع مسافة قبل الشرطة وبعدها)\n"
+            f"{SKU_HELP}"
         )
     else:
         reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
 
     await send_whatsapp_message(from_phone, reply)
+
+
+def _yes_no(text: str) -> Optional[bool]:
+    word = text.strip().strip(".!؟?").lower()
+    if word in YES_WORDS:
+        return True
+    if word in NO_WORDS:
+        return False
+    return None
+
+
+def _pending_query(db: Session, factory: models.Factory):
+    cutoff = datetime.utcnow() - PENDING_TTL
+    return db.query(models.PendingMediaUpdate).filter(
+        models.PendingMediaUpdate.factory_id == factory.id,
+        models.PendingMediaUpdate.created_at >= cutoff,
+    )
+
+
+def _latest_pending(db: Session, factory: models.Factory):
+    return _pending_query(db, factory).order_by(models.PendingMediaUpdate.id.desc()).first()
 
 
 async def _handle_image(db: Session, factory: models.Factory, from_phone: str, message: dict) -> None:
@@ -124,46 +170,153 @@ async def _handle_image(db: Session, factory: models.Factory, from_phone: str, m
             from_phone,
             "⚠️ تنسيق الشرح غير صحيح. اكتب مع الصورة:\n"
             "*اسم المنتج - السعر - رمز SKU*\n"
-            "مثال: حجر قالمة بيج - 3200 - STONE-GLM-01",
+            "مثال: حجر قالمة بيج - 3200 - B001",
         )
         return
 
     title, price, sku = parsed
     try:
-        # نتحقق من البيانات قبل تحميل الصورة (الرابط مؤقت حتى يكتمل التحميل)
+        # نتحقق من البيانات قبل أي شيء آخر (الرابط مؤقت حتى يكتمل الحفظ)
         data = schemas.ProductBase(sku=sku, title=title, price=price, primary_media_url="pending")
     except ValidationError:
         await send_whatsapp_message(
             from_phone,
-            "⚠️ بيانات غير صالحة. تأكد أن السعر رقم أكبر من الصفر، "
-            "وأن الرمز حروف لاتينية كبيرة وأرقام وشرطات فقط.",
+            "⚠️ بيانات غير صالحة. تأكد أن السعر رقم أكبر من الصفر، وأن الرمز صحيح.\n" + SKU_HELP,
         )
         return
 
-    if db.query(models.Product).filter(models.Product.sku == data.sku).first():
+    sku = data.sku
+    # الـ SKU يُبنى منه مسار على القرص، فنقبل الصيغة الصارمة فقط
+    if not media.is_valid_media_sku(sku):
+        await send_whatsapp_message(from_phone, f"⚠️ رمز المنتج ({sku}) غير صالح.\n" + SKU_HELP)
+        return
+    if not media_id:
+        await send_whatsapp_message(from_phone, "⚠️ تعذر قراءة الصورة، يرجى إعادة إرسالها.")
+        return
+
+    existing = db.query(models.Product).filter(models.Product.sku == sku).first()
+    if existing and existing.factory_id != factory.id:
         await send_whatsapp_message(
-            from_phone, f"⚠️ رمز المنتج ({data.sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر."
+            from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر."
         )
         return
 
-    image_url = await download_and_save_whatsapp_media(media_id, factory_id=factory.id, media_type="image")
-    if not image_url:
+    # المنتج أو مجلده موجود: لا نكتب شيئاً قبل أن يوافق المصنع صراحةً على التحديث
+    if existing or media.has_media(sku):
+        await _ask_to_update(db, factory, from_phone, sku, title, price, media_id)
+        return
+
+    await _store_product(db, factory, from_phone, sku, title, price, media_id)
+
+
+async def _ask_to_update(
+    db: Session, factory: models.Factory, from_phone: str,
+    sku: str, title: str, price: float, media_id: str,
+) -> None:
+    # طلب جديد لنفس الرمز يلغي القديم
+    db.query(models.PendingMediaUpdate).filter(
+        models.PendingMediaUpdate.factory_id == factory.id,
+        models.PendingMediaUpdate.sku == sku,
+    ).delete(synchronize_session=False)
+    pending = models.PendingMediaUpdate(
+        factory_id=factory.id, sku=sku, title=title, price=price, media_id=media_id,
+    )
+    db.add(pending)
+    db.commit()
+    db.refresh(pending)
+
+    await send_whatsapp_buttons(
+        from_phone,
+        f"⚠️ رمز المنتج ({sku}) موجود مسبقاً.\n\n"
+        "هل تريد تحديثه بالصورة الجديدة؟\n"
+        f"• تُستبدل الصورة الرئيسية (تُحفظ القديمة نسخةً احتياطية)\n"
+        f"• يُحدَّث الاسم والسعر: {title} - {price:g} دج\n\n"
+        "اضغط أحد الزرين، أو اكتب نعم / لا.",
+        [(f"upd:yes:{pending.id}", "نعم، حدّث"), (f"upd:no:{pending.id}", "لا، ألغِ")],
+    )
+
+
+async def _handle_interactive(db: Session, factory: models.Factory, from_phone: str, message: dict) -> None:
+    button_id = message.get("interactive", {}).get("button_reply", {}).get("id", "")
+    match = _BUTTON_ID.fullmatch(button_id)
+    if not match:
+        return
+    # نشترط أن يكون الطلب لهذا المصنع بالذات، فلا يستطيع مصنع الرد على طلب غيره
+    pending = _pending_query(db, factory).filter(
+        models.PendingMediaUpdate.id == int(match.group(2))
+    ).first()
+    await _resolve_pending(db, factory, from_phone, pending, accept=match.group(1) == "yes")
+
+
+async def _resolve_pending(
+    db: Session, factory: models.Factory, from_phone: str,
+    pending: Optional[models.PendingMediaUpdate], accept: bool,
+) -> None:
+    if pending is None:
+        await send_whatsapp_message(
+            from_phone,
+            "⚠️ هذا الطلب انتهت صلاحيته أو سبقت معالجته. أعد إرسال الصورة مع الشرح إن أردت.",
+        )
+        return
+
+    sku, title, price, media_id = pending.sku, pending.title, pending.price, pending.media_id
+    # نحذف الطلب قبل المعالجة، فلا يؤدي ضغطان متتاليان إلى تحديثين
+    db.delete(pending)
+    db.commit()
+
+    if not accept:
+        await send_whatsapp_message(
+            from_phone, f"👍 تم إلغاء الطلب. لم يتغيّر شيء في المنتج ({sku})."
+        )
+        return
+    await _store_product(db, factory, from_phone, sku, title, price, media_id)
+
+
+async def _store_product(
+    db: Session, factory: models.Factory, from_phone: str,
+    sku: str, title: str, price: float, media_id: str,
+) -> None:
+    """تحميل الصورة وحفظها في مجلد المنتج، وإنشاء المنتج أو تحديثه، ثم مزامنة ميتا."""
+    content = await download_whatsapp_media(media_id)
+    if not content:
         await send_whatsapp_message(from_phone, "⚠️ تعذر تحميل الصورة، يرجى إعادة إرسالها.")
         return
 
-    fields = data.model_dump(include=data.model_fields_set)
-    fields["primary_media_url"] = image_url
-    product, _ = upsert_product(db, factory, fields)
+    fields = {
+        "sku": sku, "title": title, "price": price,
+        "primary_media_url": media.public_image_url(sku),
+    }
+    try:
+        product, outcome = upsert_product(db, factory, fields)
+    except SkuOwnershipError:
+        db.rollback()
+        await send_whatsapp_message(
+            from_phone, f"⚠️ رمز المنتج ({sku}) مستخدم مسبقاً، يرجى اختيار رمز آخر."
+        )
+        return
+
+    # الملف قبل commit: إن فشلت الكتابة نتراجع عن القاعدة فلا يبقى منتج بلا صورة
+    try:
+        media.save_main_image(sku, content)
+    except (ValueError, OSError):
+        db.rollback()
+        logger.exception("Failed saving image for %s", sku)
+        await send_whatsapp_message(
+            from_phone, "⚠️ تعذر حفظ الصورة. تأكد أنها بصيغة JPEG أو PNG أو WebP وأعد إرسالها."
+        )
+        return
     db.commit()
     db.refresh(product)
 
+    # نزامن دائماً، حتى لو لم تتغير بيانات النص، لأن الصورة نفسها تغيّرت
     result = await sync_product_to_meta(product.id, db)
     db.refresh(product)
 
+    verb = "إضافة" if outcome == "created" else "تحديث"
     if result.get("status") == "success":
         await send_whatsapp_message(
             from_phone,
-            f"✅ تم إضافة ومزامنة المنتج بنجاح!\n\n"
+            f"✅ تم {verb} ومزامنة المنتج بنجاح!\n\n"
             f"📦 المنتج: {product.title}\n"
             f"💰 السعر: {product.price:g} دج\n"
             f"🏷️ الرمز: {product.sku}\n"

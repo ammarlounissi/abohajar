@@ -1,6 +1,5 @@
 import logging
-import uuid
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import httpx
 
@@ -9,28 +8,19 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 MAX_MEDIA_BYTES = 15 * 1024 * 1024
-EXTENSIONS = {
-    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "video/mp4": "mp4",
-}
 
 
 def _mask(phone: str) -> str:
     return f"***{phone[-4:]}"
 
 
-async def send_whatsapp_message(to_phone: str, text: str) -> Optional[dict]:
-    """إرسال رسالة نصية عبر WhatsApp Cloud API."""
+async def _post_message(to_phone: str, payload: dict) -> Optional[dict]:
     url = f"{settings.graph_url}/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {settings.META_ACCESS_TOKEN}"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_phone,
-        "type": "text",
-        "text": {"body": text},
-    }
+    body = {"messaging_product": "whatsapp", "to": to_phone, **payload}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(url, json=payload, headers=headers)
+            response = await client.post(url, json=body, headers=headers)
         if response.status_code >= 400:
             logger.error("WhatsApp send failed [%s] to %s: %s",
                          response.status_code, _mask(to_phone), response.text)
@@ -40,42 +30,51 @@ async def send_whatsapp_message(to_phone: str, text: str) -> Optional[dict]:
         return None
 
 
-async def download_and_save_whatsapp_media(
-    media_id: str, factory_id: int, media_type: str = "image"
-) -> str:
-    """تحميل وسائط واتساب وحفظها في static/uploads/factories/factory_{id}/{images|videos}/
-    وإرجاع الرابط العام، أو نص فارغ عند الفشل."""
-    headers = {"Authorization": f"Bearer {settings.META_ACCESS_TOKEN}"}
-    sub_folder = "videos" if media_type == "video" else "images"
-    target_dir = settings.UPLOADS_DIR / f"factory_{factory_id}" / sub_folder
-    target_dir.mkdir(parents=True, exist_ok=True)
+async def send_whatsapp_message(to_phone: str, text: str) -> Optional[dict]:
+    """إرسال رسالة نصية عبر WhatsApp Cloud API."""
+    return await _post_message(to_phone, {"type": "text", "text": {"body": text}})
 
+
+async def send_whatsapp_buttons(
+    to_phone: str, text: str, buttons: List[Tuple[str, str]]
+) -> Optional[dict]:
+    """رسالة بأزرار رد سريع. buttons = [(id, title), ...] بحد أقصى 3،
+    والعنوان حتى 20 حرفاً، والنص حتى 1024 حرفاً. يصل الضغط كرسالة type=interactive."""
+    return await _post_message(to_phone, {
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": text},
+            "action": {"buttons": [
+                {"type": "reply", "reply": {"id": bid, "title": title}}
+                for bid, title in buttons
+            ]},
+        },
+    })
+
+
+async def download_whatsapp_media(media_id: str) -> Optional[bytes]:
+    """تحميل وسائط واتساب (طلبان: معرّف الوسائط ثم الملف) وإرجاع محتواها،
+    أو None عند الفشل. الحفظ على القرص من مسؤولية services/media.py."""
+    headers = {"Authorization": f"Bearer {settings.META_ACCESS_TOKEN}"}
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             info = await client.get(f"{settings.graph_url}/{media_id}", headers=headers)
             if info.status_code != 200:
                 logger.error("Failed to get media info [%s]: %s", info.status_code, info.text)
-                return ""
-            info_json = info.json()
-            download_url = info_json.get("url")
+                return None
+            download_url = info.json().get("url")
             if not download_url:
-                return ""
+                return None
 
             file_res = await client.get(download_url, headers=headers)
             if file_res.status_code != 200:
                 logger.error("Failed to download media: %s", file_res.status_code)
-                return ""
+                return None
             if len(file_res.content) > MAX_MEDIA_BYTES:
                 logger.error("Media too large (%s bytes)", len(file_res.content))
-                return ""
-
-        extension = EXTENSIONS.get(info_json.get("mime_type", ""), "mp4" if media_type == "video" else "jpg")
-        filename = f"{media_type}_{uuid.uuid4().hex[:10]}.{extension}"
-        (target_dir / filename).write_bytes(file_res.content)
-
-        public_url = f"{settings.BASE_URL}/static/uploads/factories/factory_{factory_id}/{sub_folder}/{filename}"
-        logger.info("Saved %s: %s", media_type, public_url)
-        return public_url
+                return None
+            return file_res.content
     except Exception:
-        logger.exception("Error downloading %s", media_type)
-        return ""
+        logger.exception("Error downloading media %s", media_id)
+        return None

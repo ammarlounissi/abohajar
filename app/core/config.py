@@ -41,9 +41,18 @@ class Settings:
     # قاعدة روابط صور المنتجات: {IMAGE_BASE_URL}/{الفئة}/{SKU}/1.jpg
     IMAGE_BASE_URL = _get("IMAGE_BASE_URL").rstrip("/")
 
+    # مجلد صور المنتجات: مستقل عن كود المشروع، وتخدمه Nginx مباشرة.
+    # البنية: {MEDIA_ROOT}/{الفئة}/{SKU}/{الرقم}.{الامتداد}  مثل  B/B001/1.jpg
+    MEDIA_ROOT = Path(_get("MEDIA_ROOT")).expanduser() if _get("MEDIA_ROOT") else None
+    # أين تُنقل الصورة القديمة عند استبدالها (خارج MEDIA_ROOT كي لا تُزامَن ولا تُخدم)
+    MEDIA_BACKUP_DIR = (
+        Path(_get("MEDIA_BACKUP_DIR")).expanduser()
+        if _get("MEDIA_BACKUP_DIR") else BASE_DIR / "media_backup"
+    )
+
     # المجلدات
     STATIC_DIR = BASE_DIR / "static"
-    UPLOADS_DIR = STATIC_DIR / "uploads" / "factories"
+    UPLOADS_DIR = STATIC_DIR / "uploads" / "factories"   # قديم: لم يعد يُستعمل لصور المنتجات
 
     REQUIRED = (
         "VERIFY_TOKEN",
@@ -53,6 +62,8 @@ class Settings:
         "WHATSAPP_PHONE_NUMBER_ID",
         "ADMIN_API_KEY",
         "BASE_URL",
+        "IMAGE_BASE_URL",
+        "MEDIA_ROOT",
     )
 
     @property
@@ -63,6 +74,12 @@ class Settings:
         missing = [n for n in self.REQUIRED if not getattr(self, n)]
         if missing:
             raise RuntimeError(f"متغيرات ناقصة في .env: {', '.join(missing)}")
+        # لا ننشئ MEDIA_ROOT تلقائياً: لو كان المسار خاطئاً أو القرص غير مركّب
+        # فسنكتب الصور في مكان خاطئ بصمت. الأفضل أن يتوقف التشغيل.
+        if not self.MEDIA_ROOT.is_dir():
+            raise RuntimeError(f"MEDIA_ROOT غير موجود أو ليس مجلداً: {self.MEDIA_ROOT}")
+        if not os.access(self.MEDIA_ROOT, os.W_OK | os.X_OK):
+            raise RuntimeError(f"لا توجد صلاحية كتابة على MEDIA_ROOT: {self.MEDIA_ROOT}")
 
 
 settings = Settings()

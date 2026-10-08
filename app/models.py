@@ -92,3 +92,17 @@ class ProcessedMessage(Base):
     id = Column(Integer, primary_key=True)
     message_id = Column(String(128), unique=True, index=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PendingMediaUpdate(Base):
+    """طلب إضافة بصورة لمنتج (أو مجلد) موجود مسبقاً، ينتظر جواب المصنع بنعم أو لا.
+    لا نحمّل الصورة قبل الموافقة: نحفظ media_id فقط (صالح عند ميتا نحو 30 يوماً)."""
+    __tablename__ = "pending_media_updates"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    sku = Column(String(50), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    price = Column(Float, nullable=False)
+    media_id = Column(String(128), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

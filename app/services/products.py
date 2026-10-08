@@ -35,12 +35,12 @@ def parse_caption(caption: str) -> Optional[Tuple[str, float, str]]:
 
 
 def build_image_url(sku: str) -> str:
-    """يبني رابط الصورة الرئيسية من الـ SKU: {IMAGE_BASE_URL}/{الفئة}/{SKU}/1.jpg
+    """يبني رابط الصورة الرئيسية من الـ SKU: {IMAGE_BASE_URL}/{الفئة}/{SKU}/1  (بلا امتداد، تحلّه Nginx)
     الفئة هي الحروف في بداية الرمز (B001 -> B، PTK012 -> PTK)."""
     match = re.match(r"[A-Z]+", sku)
     if not settings.IMAGE_BASE_URL or not match:
         return ""
-    return f"{settings.IMAGE_BASE_URL}/{match.group(0)}/{sku}/1.jpg"
+    return f"{settings.IMAGE_BASE_URL}/{match.group(0)}/{sku}/1"
 
 
 def default_description(title: str, factory: models.Factory) -> str:
