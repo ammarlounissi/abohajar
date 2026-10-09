@@ -38,15 +38,18 @@ class Settings:
     # الأمان
     ADMIN_API_KEY = _get("ADMIN_API_KEY")
     ALLOWED_ORIGINS = [
-        o.strip()
-        for o in _get("ALLOWED_ORIGINS", "https://store.hadjretbladi.com").split(",")
-        if o.strip()
-    ]
+    o.strip( )
+    for o in _get(
+        "ALLOWED_ORIGINS",
+        "https://hadjretbladi.com,https://www.hadjretbladi.com,https://store.hadjretbladi.com",
+     ).split(",")
+    if o.strip()
+]
 
     # الروابط العامة
     BASE_URL = _get("BASE_URL").rstrip("/")             # عنوان هذا الـ API العام
     PRODUCT_LINK_TEMPLATE = _get(
-        "PRODUCT_LINK_TEMPLATE", "https://store.hadjretbladi.com/p/{sku}"
+        "PRODUCT_LINK_TEMPLATE", "https://store.hadjretbladi.com/{sku}"
     )
 
     # قاعدة روابط صور المنتجات: {IMAGE_BASE_URL}/{SKU}/{الرقم}.{الامتداد}  (مثل https://hadjretbladi.com/B001/1.jpg)
