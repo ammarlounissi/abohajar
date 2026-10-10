@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.database import SessionLocal
-from app.services import media
+from app.services import factory_bot, media
 from app.services.admin_command import is_import_command
 from app.services.import_report import ImportConfigError, format_report
 from app.services.media_import import run_import, sync_touched
@@ -23,12 +23,6 @@ from app.services.whatsapp import (
 
 logger = logging.getLogger(__name__)
 
-GREETING_KEYWORDS = [
-    "السلام عليكم", "سلام عليكم", "السلام", "سلام", "مرحبا",
-    "صباح الخير", "مساء الخير", "salam", "slm",
-]
-
-
 # مهلة جواب المصنع على سؤال "هل تريد التحديث؟"
 PENDING_TTL = timedelta(hours=24)
 YES_WORDS = {"نعم", "اي", "أي", "yes", "oui", "ok"}
@@ -39,11 +33,6 @@ _BUTTON_ID = re.compile(r"upd:(yes|no):(\d+)")
 _import_lock = asyncio.Lock()
 
 SKU_HELP = "رمز المنتج حروف لاتينية كبيرة متبوعة بأرقام فقط، مثل B001 أو PTK012."
-
-
-def check_greeting(text: str) -> bool:
-    clean_text = text.lower().strip()
-    return any(keyword in clean_text for keyword in GREETING_KEYWORDS)
 
 
 def _mask(phone: str) -> str:
@@ -113,7 +102,11 @@ async def _process_message(db: Session, message: dict) -> None:
     if msg_type == "text":
         await _handle_text(db, factory, from_phone, message)
     elif msg_type == "image":
-        await _handle_image(db, factory, from_phone, message)
+        # داخل جلسة نشطة للبوت تذهب الصورة إليه؛ وإلا فمسار الصورة + الشرح القديم
+        if not await factory_bot.handle(db, factory, from_phone, message):
+            await _handle_image(db, factory, from_phone, message)
+    elif msg_type == "video":
+        await factory_bot.handle(db, factory, from_phone, message)
     elif msg_type == "interactive":
         await _handle_interactive(db, factory, from_phone, message)
 
@@ -121,34 +114,16 @@ async def _process_message(db: Session, message: dict) -> None:
 async def _handle_text(db: Session, factory: models.Factory, from_phone: str, message: dict) -> None:
     raw_text = message.get("text", {}).get("body", "").strip()
 
-    # جواب نعم/لا نصاً (بديل عن الأزرار) يخص آخر طلب معلّق لهذا المصنع
+    # جواب نعم/لا نصاً (بديل عن الأزرار) يخص آخر طلب تحديث معلّق، ما لم يكن المصنع داخل شجرة البوت
     answer = _yes_no(raw_text)
-    if answer is not None:
+    if answer is not None and not factory_bot.has_session(db, factory):
         pending = _latest_pending(db, factory)
         if pending:
             await _resolve_pending(db, factory, from_phone, pending, accept=answer)
             return
 
-    if check_greeting(raw_text):
-        reply = (
-            "وعليكم السلام ورحمة الله وبركاته 🌸\n"
-            f"أهلاً بك مصنع ({factory.name}) في منصة حجرة بلادي 🏛️.\n\n"
-            "أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
-        )
-    elif "إضافة منتج" in raw_text or "اضافة منتج" in raw_text:
-        reply = (
-            f"أهلاً بك مصنع ({factory.name}) 🏛️\n\n"
-            "لإضافة منتج جديد، أرسل *صورة الحجر* واكتب في الشرح (Caption) التنسيق التالي:\n\n"
-            "*اسم المنتج - السعر - رمز SKU*\n\n"
-            "📌 مثال:\n"
-            "حجر قالمة بيج - 3200 - B001\n\n"
-            "(ضع مسافة قبل الشرطة وبعدها)\n"
-            f"{SKU_HELP}"
-        )
-    else:
-        reply = "مرحباً بك! أرسل كلمة *إضافة منتج* للبدء في رفع منتجاتك."
-
-    await send_whatsapp_message(from_phone, reply)
+    # كل ما عدا ذلك تتولاه شجرة البوت (القائمة الرئيسية: إضافة منتج / تعديل منتج)
+    await factory_bot.handle(db, factory, from_phone, message)
 
 
 async def _run_import_command(from_phone: str) -> None:
@@ -286,6 +261,7 @@ async def _handle_interactive(db: Session, factory: models.Factory, from_phone: 
     button_id = message.get("interactive", {}).get("button_reply", {}).get("id", "")
     match = _BUTTON_ID.fullmatch(button_id)
     if not match:
+        await factory_bot.handle(db, factory, from_phone, message)    # أزرار وقوائم شجرة البوت (fb:...)
         return
     # نشترط أن يكون الطلب لهذا المصنع بالذات، فلا يستطيع مصنع الرد على طلب غيره
     pending = _pending_query(db, factory).filter(

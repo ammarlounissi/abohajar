@@ -53,6 +53,32 @@ async def send_whatsapp_buttons(
     })
 
 
+async def send_whatsapp_list(
+    to_phone: str, text: str, button_label: str,
+    rows: List[Tuple[str, str, str]], section_title: str = "الخيارات",
+) -> Optional[dict]:
+    """رسالة قائمة منسدلة. rows = [(id, title, description), ...] بحد أقصى 10 صفوف،
+    العنوان حتى 24 حرفاً، والوصف حتى 72 (يُحذف إن كان فارغاً)، وزر الفتح حتى 20 حرفاً.
+    يصل الاختيار كرسالة type=interactive بحقل list_reply."""
+    out_rows = []
+    for rid, title, desc in rows[:10]:
+        row = {"id": rid, "title": title[:24]}
+        if desc:
+            row["description"] = desc[:72]
+        out_rows.append(row)
+    return await _post_message(to_phone, {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": text[:1024]},
+            "action": {
+                "button": button_label[:20],
+                "sections": [{"title": section_title[:24], "rows": out_rows}],
+            },
+        },
+    })
+
+
 async def download_whatsapp_media(media_id: str) -> Optional[bytes]:
     """تحميل وسائط واتساب (طلبان: معرّف الوسائط ثم الملف) وإرجاع محتواها،
     أو None عند الفشل. الحفظ على القرص من مسؤولية services/media.py."""

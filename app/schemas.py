@@ -1,3 +1,4 @@
+import re
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -12,10 +13,28 @@ class FactoryBase(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     phone_number: str = Field(pattern=r"^\+?\d{8,15}$")   # بصيغة دولية، مثل +213550000000
     address: Optional[str] = Field(default=None, max_length=255)
+    # أصناف المصنع: حروف لاتينية كبيرة، مثل ["B", "PK"]
+    categories: List[str] = Field(default_factory=list)
+
+    @field_validator("categories", mode="before")
+    @classmethod
+    def normalize_categories(cls, v):
+        if v is None:
+            return []
+        cleaned = sorted({c.strip().upper() for c in v if isinstance(c, str) and c.strip()})
+        if any(not re.fullmatch(r"[A-Z]+", c) for c in cleaned):
+            raise ValueError("الصنف حروف لاتينية فقط، مثل B أو PK")
+        return cleaned
 
 
 class FactoryCreate(FactoryBase):
     pass
+
+
+class FactoryCategoriesUpdate(BaseModel):
+    categories: List[str] = Field(default_factory=list)
+
+    _normalize = field_validator("categories", mode="before")(FactoryBase.normalize_categories.__func__)
 
 
 class FactoryResponse(FactoryBase):
@@ -37,6 +56,7 @@ class ProductBase(BaseModel):
     brand: str = "Hojrat Bladi"
     primary_media_url: str = Field(min_length=1, max_length=500)
     additional_media_urls: List[str] = Field(default_factory=list)
+    video_url: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("sku", mode="before")
     @classmethod
@@ -80,3 +100,4 @@ class ProductPublicResponse(BaseModel):
     brand: str
     primary_media_url: str
     additional_media_urls: List[str] = Field(default_factory=list)
+    video_url: Optional[str] = None

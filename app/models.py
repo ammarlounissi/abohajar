@@ -35,6 +35,8 @@ class Factory(Base):
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
     address = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
+    # أصناف المصنع (الحروف في بداية الـ SKU)، مثل ["B", "PK"]. لكل مصنع صنف واحد أو أكثر.
+    categories = Column(JSON, default=list)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     products = relationship("Product", back_populates="factory")
@@ -57,6 +59,7 @@ class Product(Base):
 
     primary_media_url = Column(String(500), nullable=False)
     additional_media_urls = Column(JSON, default=list)
+    video_url = Column(String(500), nullable=True)   # فيديو قصير اختياري (video.mp4 في مجلد المنتج)
 
     meta_product_id = Column(String(100), unique=True, nullable=True)
     sync_status = Column(Enum(SyncStatus), default=SyncStatus.PENDING)
@@ -106,3 +109,15 @@ class PendingMediaUpdate(Base):
     price = Column(Float, nullable=False)
     media_id = Column(String(128), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class BotSession(Base):
+    """حالة محادثة المصنع في شجرة البوت (إضافة/تعديل منتج). صف واحد لكل مصنع.
+    المسودة تبقى هنا ولا تُكتب في جدول المنتجات إلا عند التأكيد."""
+    __tablename__ = "bot_sessions"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, unique=True, index=True)
+    state = Column(String(40), nullable=False)
+    draft = Column(JSON, default=dict, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

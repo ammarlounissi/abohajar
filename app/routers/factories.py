@@ -29,3 +29,15 @@ def create_factory(factory: schemas.FactoryCreate, db: Session = Depends(get_db)
 @router.get("/", response_model=List[schemas.FactoryResponse])
 def get_factories(db: Session = Depends(get_db)):
     return db.query(models.Factory).all()
+
+
+@router.put("/{factory_id}/categories", response_model=schemas.FactoryResponse)
+def set_factory_categories(factory_id: int, body: schemas.FactoryCategoriesUpdate, db: Session = Depends(get_db)):
+    """يحدد أصناف المصنع (الحروف في بداية الـ SKU)، وهي التي يراها في بوت «إضافة منتج»."""
+    factory = db.query(models.Factory).filter(models.Factory.id == factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="المصنع غير موجود")
+    factory.categories = body.categories
+    db.commit()
+    db.refresh(factory)
+    return factory
