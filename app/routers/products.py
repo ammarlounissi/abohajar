@@ -54,6 +54,36 @@ def update_product(product_id: int, update: schemas.ProductUpdate, db: Session =
     return product
 
 
+@router.patch("/by-sku/{sku}", response_model=schemas.ProductResponse, dependencies=admin_only)
+def update_product_by_sku(sku: str, update: schemas.ProductSkuUpdate, db: Session = Depends(get_db)):
+    product = db.query(models.Product).filter(models.Product.sku == sku.upper()).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="المنتج غير موجود")
+    for key, value in update.model_dump(exclude_unset=True).items():
+        setattr(product, key, value)
+    product.sync_status = models.SyncStatus.PENDING
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+@router.delete("/by-sku/{sku}", dependencies=admin_only)
+def delete_product_by_sku(sku: str, db: Session = Depends(get_db)):
+    product = db.query(models.Product).filter(models.Product.sku == sku.upper()).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="المنتج غير موجود")
+    db.delete(product)
+    db.commit()
+    return {"status": "success", "sku": sku.upper(), "message": "تم حذف المنتج بنجاح"}
+
+
+@router.post("/sync-meta/all", status_code=status.HTTP_202_ACCEPTED, dependencies=admin_only)
+def sync_all_products_with_meta(background: BackgroundTasks, db: Session = Depends(get_db)):
+    product_ids = [row.id for row in db.query(models.Product.id).all()]
+    background.add_task(sync_products_in_background, product_ids)
+    return {"status": "queued", "count": len(product_ids), "message": "بدأت مزامنة المنتجات مع Meta في الخلفية"}
+
+
 @router.post("/{product_id}/sync-meta", dependencies=admin_only)
 async def trigger_meta_sync(product_id: int, db: Session = Depends(get_db)):
     return await sync_product_to_meta(product_id, db)

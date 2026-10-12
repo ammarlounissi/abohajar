@@ -26,6 +26,19 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class PostStatus(str, enum.Enum):
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+
+
+class PostApproval(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class Factory(Base):
     """أصحاب المصانع / الموردون"""
     __tablename__ = "factories"
@@ -38,6 +51,7 @@ class Factory(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     products = relationship("Product", back_populates="factory")
+    posts = relationship("Post", back_populates="factory")
 
 
 class Product(Base):
@@ -67,6 +81,23 @@ class Product(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Post(Base):
+    """منشور مخصص للنشر على مواقع التواصل الاجتماعي."""
+    __tablename__ = "posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    media_type = Column(Enum("image", "gallery", "reel", name="postmediatype"), nullable=False)
+    media_urls = Column(JSON, nullable=False, default=list)
+    description = Column(Text, nullable=True)
+    status = Column(Enum(PostStatus), nullable=False, default=PostStatus.DRAFT)
+    approval = Column(Enum(PostApproval), nullable=False, default=PostApproval.PENDING)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    published_at = Column(DateTime, nullable=True)
+
+    factory = relationship("Factory", back_populates="posts")
 
 
 class Order(Base):

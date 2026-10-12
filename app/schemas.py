@@ -1,8 +1,9 @@
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import Availability, SyncStatus
+from app.models import Availability, PostApproval, PostStatus, SyncStatus
 
 SKU_PATTERN = r"^[A-Z0-9][A-Z0-9_-]{1,49}$"   # مثال: STONE-GLM-01
 
@@ -16,6 +17,13 @@ class FactoryBase(BaseModel):
 
 class FactoryCreate(FactoryBase):
     pass
+
+
+class FactoryUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    phone_number: Optional[str] = Field(default=None, pattern=r"^\+?\d{8,15}$")
+    address: Optional[str] = Field(default=None, max_length=255)
+    is_active: Optional[bool] = None
 
 
 class FactoryResponse(FactoryBase):
@@ -55,6 +63,11 @@ class ProductUpdate(BaseModel):
     availability: Optional[Availability] = None
 
 
+class ProductSkuUpdate(ProductUpdate):
+    """حقول المنتج التي يمكن تعديلها باستخدام SKU."""
+    pass
+
+
 class ProductResponse(ProductBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -80,3 +93,33 @@ class ProductPublicResponse(BaseModel):
     brand: str
     primary_media_url: str
     additional_media_urls: List[str] = Field(default_factory=list)
+
+
+class PostBase(BaseModel):
+    factory_id: int
+    media_type: Literal["image", "gallery", "reel"]
+    media_urls: List[str] = Field(min_length=1)
+    description: Optional[str] = None
+    status: PostStatus = PostStatus.DRAFT
+    approval: PostApproval = PostApproval.PENDING
+    published_at: Optional[datetime] = None
+
+
+class PostCreate(PostBase):
+    pass
+
+
+class PostUpdate(BaseModel):
+    factory_id: Optional[int] = None
+    media_type: Optional[Literal["image", "gallery", "reel"]] = None
+    media_urls: Optional[List[str]] = Field(default=None, min_length=1)
+    description: Optional[str] = None
+    status: Optional[PostStatus] = None
+    approval: Optional[PostApproval] = None
+    published_at: Optional[datetime] = None
+
+
+class PostResponse(PostBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
