@@ -61,6 +61,8 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     sku = Column(String(50), unique=True, index=True, nullable=False)  # retailer_id
+    category_code = Column(String(20), nullable=False, index=True)
+    tags = Column(JSON, nullable=False, default=list)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     price = Column(Float, nullable=False)

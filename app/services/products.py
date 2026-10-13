@@ -14,8 +14,8 @@ from app.services import media
 # فاصل يجب أن يحيط به مسافات (أو سطر جديد) حتى لا ينكسر SKU مثل STONE-GLM-01
 _CAPTION_SPLIT = re.compile(r"\s+[-–—|]\s+|\n")
 
-REQUIRED_COLUMNS = {"sku", "title", "price"}
-OPTIONAL_COLUMNS = ("description", "currency", "condition", "brand", "availability")
+REQUIRED_COLUMNS = {"sku", "title", "price", "category_code"}
+OPTIONAL_COLUMNS = ("description", "currency", "condition", "brand", "availability", "category_code")
 
 
 class SkuOwnershipError(Exception):
@@ -115,6 +115,8 @@ def import_csv(db: Session, factory: models.Factory, content: bytes):
             fields["additional_media_urls"] = [
                 u.strip() for u in row["additional_media_urls"].split("|") if u.strip()
             ]
+        if row.get("tags"):
+            fields["tags"] = [tag.strip() for tag in row["tags"].split("|") if tag.strip()]
 
         try:
             data = schemas.ProductBase(**fields)

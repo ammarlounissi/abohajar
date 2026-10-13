@@ -36,6 +36,8 @@ class FactoryResponse(FactoryBase):
 # --- المنتجات ---
 class ProductBase(BaseModel):
     sku: str = Field(pattern=SKU_PATTERN)
+    category_code: str = Field(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")
+    tags: List[str] = Field(default_factory=list, max_length=30)
     title: str = Field(min_length=2, max_length=255)
     description: Optional[str] = None
     price: float = Field(gt=0)
@@ -51,16 +53,58 @@ class ProductBase(BaseModel):
     def normalize_sku(cls, v):
         return v.strip().upper() if isinstance(v, str) else v
 
+    @field_validator("category_code", mode="before")
+    @classmethod
+    def normalize_category_code(cls, v):
+        return v.strip().upper() if isinstance(v, str) else v
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values):
+        normalized = []
+        for value in values:
+            tag = value.strip()
+            if not tag:
+                raise ValueError("لا يمكن أن يكون الوسم فارغاً")
+            if len(tag) > 50:
+                raise ValueError("يجب ألا يتجاوز الوسم 50 حرفاً")
+            if tag not in normalized:
+                normalized.append(tag)
+        return normalized
+
 
 class ProductCreate(ProductBase):
     factory_id: int
 
 
 class ProductUpdate(BaseModel):
+    category_code: Optional[str] = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")
+    tags: Optional[List[str]] = Field(default=None, max_length=30)
     title: Optional[str] = Field(default=None, min_length=2, max_length=255)
     description: Optional[str] = None
     price: Optional[float] = Field(default=None, gt=0)
     availability: Optional[Availability] = None
+
+    @field_validator("category_code", mode="before")
+    @classmethod
+    def normalize_update_category_code(cls, v):
+        return v.strip().upper() if isinstance(v, str) else v
+
+    @field_validator("tags")
+    @classmethod
+    def validate_update_tags(cls, values):
+        if values is None:
+            return values
+        normalized = []
+        for value in values:
+            tag = value.strip()
+            if not tag:
+                raise ValueError("لا يمكن أن يكون الوسم فارغاً")
+            if len(tag) > 50:
+                raise ValueError("يجب ألا يتجاوز الوسم 50 حرفاً")
+            if tag not in normalized:
+                normalized.append(tag)
+        return normalized
 
 
 class ProductSkuUpdate(ProductUpdate):
@@ -84,6 +128,8 @@ class ProductPublicResponse(BaseModel):
 
     id: int
     sku: str
+    category_code: str
+    tags: List[str] = Field(default_factory=list)
     title: str
     description: Optional[str] = None
     price: float

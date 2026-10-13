@@ -31,6 +31,14 @@ def get_factories(db: Session = Depends(get_db)):
     return db.query(models.Factory).all()
 
 
+@router.get("/{factory_id}", response_model=schemas.FactoryResponse)
+def get_factory(factory_id: int, db: Session = Depends(get_db)):
+    factory = db.query(models.Factory).filter(models.Factory.id == factory_id).first()
+    if not factory:
+        raise HTTPException(status_code=404, detail="المصنع غير موجود")
+    return factory
+
+
 @router.patch("/{factory_id}", response_model=schemas.FactoryResponse)
 def update_factory(factory_id: int, update: schemas.FactoryUpdate, db: Session = Depends(get_db)):
     factory = db.query(models.Factory).filter(models.Factory.id == factory_id).first()

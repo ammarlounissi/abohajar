@@ -1,0 +1,852 @@
+[
+  {
+    "method": "GET",
+    "path": "/openapi.json",
+    "check": "openapi",
+    "url": "http://127.0.0.1:8000/openapi.json",
+    "status": 200,
+    "seconds": 0.038,
+    "verdict": "PASS",
+    "response": "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Hojrat Bladi API\",\"version\":\"1.2.0\"},\"paths\":{\"/api/factories/\":{\"post\":{\"tags\":[\"factories\"],\"summary\":\"Create Factory\",\"operationId\":\"create_factory_api_factories__post\",\"parameters\":[{\"name\":\"x-api-key\",\"in\":\"header\",\"required\":false,\"schema\":{\"type\":\"string\",\"default\":\"\",\"title\":\"X-Api-Key\"}}],\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/FactoryCreate\"}}}},\"responses\":{\"201\":{\"description\":\"Successful"
+  },
+  {
+    "method": "POST",
+    "path": "/api/factories/",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 401,
+    "seconds": 0.002,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/factories/",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 401,
+    "seconds": 0.002,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 200,
+    "seconds": 0.003,
+    "verdict": "PASS",
+    "response": "[{\"name\":\"string\",\"phone_number\":\"+576765486\",\"address\":\"string\",\"id\":1,\"is_active\":true},{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2133203300300\",\"address\":\"ZZ test\",\"id\":2,\"is_active\":true}]"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/{factory_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/factories/999999999",
+    "status": 401,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/{factory_id}",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/factories/1",
+    "status": 200,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"name\":\"string\",\"phone_number\":\"+576765486\",\"address\":\"string\",\"id\":1,\"is_active\":true}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/factories/{factory_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/factories/999999999",
+    "status": 401,
+    "seconds": 0.002,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/factories/{factory_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/factories/{factory_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/factories/{factory_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/factories/999999999",
+    "status": 401,
+    "seconds": 0.002,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/factories/{factory_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/factories/{factory_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "POST",
+    "path": "/api/posts/",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 401,
+    "seconds": 0.002,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/posts/",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 401,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 200,
+    "seconds": 0.009,
+    "verdict": "PASS",
+    "response": "[{\"factory_id\":2,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST32033003/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":1,\"created_at\":\"2026-10-13T13:06:48.205236\"}]"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/{post_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/posts/999999999",
+    "status": 401,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/{post_id}",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/posts/1",
+    "status": 200,
+    "seconds": 0.011,
+    "verdict": "PASS",
+    "response": "{\"factory_id\":2,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST32033003/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":1,\"created_at\":\"2026-10-13T13:06:48.205236\"}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/posts/{post_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/posts/999999999",
+    "status": 401,
+    "seconds": 0.009,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/posts/{post_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/posts/{post_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/posts/{post_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/posts/999999999",
+    "status": 401,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/posts/{post_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/posts/{post_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 401,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 200,
+    "seconds": 0.026,
+    "verdict": "PASS",
+    "response": "[{\"id\":1,\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "public-response-no-sensitive-fields",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 200,
+    "seconds": 0.022,
+    "verdict": "PASS",
+    "response": "ok"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "limit-over-max",
+    "url": "http://127.0.0.1:8000/api/products/?limit=501",
+    "status": 422,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 500\",\"input\":\"501\",\"ctx\":{\"le\":500}}]}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "negative-skip",
+    "url": "http://127.0.0.1:8000/api/products/?skip=-1",
+    "status": 422,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"skip\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}}]}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "category-sql-probe",
+    "url": "http://127.0.0.1:8000/api/products/?category_code=%27+OR+1%3D1+--",
+    "status": 200,
+    "seconds": 0.011,
+    "verdict": "PASS",
+    "response": "[]"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "tag-sql-probe",
+    "url": "http://127.0.0.1:8000/api/products/?tag=%27+OR+1%3D1+--",
+    "status": 200,
+    "seconds": 0.01,
+    "verdict": "PASS",
+    "response": "[]"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/admin",
+    "status": 401,
+    "seconds": 0.008,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/products/admin",
+    "status": 200,
+    "seconds": 0.021,
+    "verdict": "PASS",
+    "response": "[{\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B001/6.j"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin/{product_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/admin/999999999",
+    "status": 401,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin/{product_id}",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/products/admin/1",
+    "status": 200,
+    "seconds": 0.011,
+    "verdict": "PASS",
+    "response": "{\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B001/6.jp"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/by-sku/{sku}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZNOPE999",
+    "status": 401,
+    "seconds": 0.007,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/by-sku/{sku}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/{sku}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/by-sku/{sku}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZNOPE999",
+    "status": 401,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/by-sku/{sku}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/{sku}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/clear-all",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/clear-all?confirm=false",
+    "status": 401,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/clear-all",
+    "check": "dangerous-operation-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/clear-all",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "skipped by design"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/sync-meta/all",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/sync-meta/all",
+    "status": 401,
+    "seconds": 0.004,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/sync-meta/all",
+    "check": "dangerous-operation-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/sync-meta/all",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "skipped by design"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/upload-csv",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/upload-csv?factory_id=999999999",
+    "status": 401,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/upload-csv",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/upload-csv",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/{product_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/999999999",
+    "status": 401,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/{product_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/{product_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/{product_id}",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/999999999",
+    "status": 401,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/{product_id}",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/{product_id}",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/{product_id}/sync-meta",
+    "check": "missing-api-key",
+    "url": "http://127.0.0.1:8000/api/products/999999999/sync-meta",
+    "status": 401,
+    "seconds": 0.009,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Unauthorized\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/{product_id}/sync-meta",
+    "check": "write-not-executed",
+    "url": "http://127.0.0.1:8000/api/products/{product_id}/sync-meta",
+    "status": "-",
+    "seconds": 0,
+    "verdict": "SKIP",
+    "response": "use --write for CRUD lifecycle"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/{sku}",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/api/products/B001",
+    "status": 200,
+    "seconds": 0.011,
+    "verdict": "PASS",
+    "response": "{\"id\":1,\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B0"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/{sku}",
+    "check": "invalid-sku:bad-sku!",
+    "url": "http://127.0.0.1:8000/api/products/bad-sku%21",
+    "status": 422,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"رمز SKU غير صالح\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/{sku}",
+    "check": "invalid-sku:../etc/passwd",
+    "url": "http://127.0.0.1:8000/api/products/..%2Fetc%2Fpasswd",
+    "status": 404,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Not Found\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/{sku}",
+    "check": "invalid-sku:ZZNOPE999",
+    "url": "http://127.0.0.1:8000/api/products/ZZNOPE999",
+    "status": 404,
+    "seconds": 0.01,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"المنتج غير موجود\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/health",
+    "check": "read-route",
+    "url": "http://127.0.0.1:8000/health",
+    "status": 200,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"status\":\"ok\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/webhook",
+    "check": "webhook-invalid-credentials",
+    "url": "http://127.0.0.1:8000/webhook?hub.mode=subscribe&hub.verify_token=wrong-token&hub.challenge=123",
+    "status": 403,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Verification failed\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/webhook",
+    "check": "webhook-invalid-credentials",
+    "url": "http://127.0.0.1:8000/webhook",
+    "status": 403,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"Invalid signature\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/factories/",
+    "check": "factory-create",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 201,
+    "seconds": 0.044,
+    "verdict": "PASS",
+    "response": "{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2132281330800\",\"address\":null,\"id\":3,\"is_active\":true}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/3",
+    "check": "factory-read",
+    "url": "http://127.0.0.1:8000/api/factories/3",
+    "status": 200,
+    "seconds": 0.015,
+    "verdict": "PASS",
+    "response": "{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2132281330800\",\"address\":null,\"id\":3,\"is_active\":true}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/factories/",
+    "check": "factory-list",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 200,
+    "seconds": 0.005,
+    "verdict": "PASS",
+    "response": "[{\"name\":\"string\",\"phone_number\":\"+576765486\",\"address\":\"string\",\"id\":1,\"is_active\":true},{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2133203300300\",\"address\":\"ZZ test\",\"id\":2,\"is_active\":true},{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2132281330800\",\"address\":null,\"id\":3,\"is_active\":true}]"
+  },
+  {
+    "method": "POST",
+    "path": "/api/factories/",
+    "check": "factory-invalid-phone",
+    "url": "http://127.0.0.1:8000/api/factories/",
+    "status": 422,
+    "seconds": 0.003,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"phone_number\"],\"msg\":\"String should match pattern '^\\\\+?\\\\d{8,15}$'\",\"input\":\"not-a-phone\",\"ctx\":{\"pattern\":\"^\\\\+?\\\\d{8,15}$\"}}]}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/factories/3",
+    "check": "factory-update",
+    "url": "http://127.0.0.1:8000/api/factories/3",
+    "status": 200,
+    "seconds": 0.03,
+    "verdict": "PASS",
+    "response": "{\"name\":\"ZZ Test Factory\",\"phone_number\":\"+2132281330800\",\"address\":\"ZZ test\",\"id\":3,\"is_active\":true}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/factories/999999999",
+    "check": "factory-missing-update",
+    "url": "http://127.0.0.1:8000/api/factories/999999999",
+    "status": 404,
+    "seconds": 0.013,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"المصنع غير موجود\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/",
+    "check": "product-create",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 201,
+    "seconds": 0.063,
+    "verdict": "PASS",
+    "response": "{\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"اختبار\",\"رخام\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1000.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\",\"additional_media_urls\":[],\"id\":227,\"factory_id\":3,\"meta_product_id\":null,\"sync_status\":\"pending\",\"sync_error_message\":null}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin/227",
+    "check": "product-read-by-id",
+    "url": "http://127.0.0.1:8000/api/products/admin/227",
+    "status": 200,
+    "seconds": 0.027,
+    "verdict": "PASS",
+    "response": "{\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"اختبار\",\"رخام\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1000.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\",\"additional_media_urls\":[],\"id\":227,\"factory_id\":3,\"meta_product_id\":null,\"sync_status\":\"pending\",\"sync_error_message\":null}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/ZZTEST22813308",
+    "check": "product-read-by-sku",
+    "url": "http://127.0.0.1:8000/api/products/ZZTEST22813308",
+    "status": 200,
+    "seconds": 0.013,
+    "verdict": "PASS",
+    "response": "{\"id\":227,\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"اختبار\",\"رخام\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1000.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\",\"additional_media_urls\":[]}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "product-filter-category",
+    "url": "http://127.0.0.1:8000/api/products/?category_code=zz",
+    "status": 200,
+    "seconds": 0.008,
+    "verdict": "PASS",
+    "response": "[{\"id\":226,\"sku\":\"ZZTEST32033003\",\"category_code\":\"ZZ\",\"tags\":[\"محدث\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1200.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST32033003/1\",\"additional_media_urls\":[]},{\"id\":227,\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"اختبار\",\"رخام\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1000.0,\"currency\":\"DZD\",\""
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/",
+    "check": "product-filter-tag",
+    "url": "http://127.0.0.1:8000/api/products/?tag=%D8%A7%D8%AE%D8%AA%D8%A8%D8%A7%D8%B1",
+    "status": 200,
+    "seconds": 0.01,
+    "verdict": "PASS",
+    "response": "[]"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin",
+    "check": "product-list-admin",
+    "url": "http://127.0.0.1:8000/api/products/admin?limit=500",
+    "status": 200,
+    "seconds": 0.044,
+    "verdict": "PASS",
+    "response": "[{\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B001/6.j"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/",
+    "check": "product-duplicate-sku",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 400,
+    "seconds": 0.01,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"رمز SKU مستخدم مسبقاً\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/products/",
+    "check": "product-invalid-category",
+    "url": "http://127.0.0.1:8000/api/products/",
+    "status": 422,
+    "seconds": 0.009,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"category_code\"],\"msg\":\"String should match pattern '^[A-Za-z0-9_-]+$'\",\"input\":\"BAD CATEGORY\",\"ctx\":{\"pattern\":\"^[A-Za-z0-9_-]+$\"}}]}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/by-sku/ZZTEST22813308",
+    "check": "product-empty-tag",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZTEST22813308",
+    "status": 422,
+    "seconds": 0.008,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"tags\"],\"msg\":\"Value error, لا يمكن أن يكون الوسم فارغاً\",\"input\":[\"\"],\"ctx\":{\"error\":{}}}]}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/227",
+    "check": "product-update-by-id",
+    "url": "http://127.0.0.1:8000/api/products/227",
+    "status": 200,
+    "seconds": 0.036,
+    "verdict": "PASS",
+    "response": "{\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"اختبار\",\"رخام\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1200.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\",\"additional_media_urls\":[],\"id\":227,\"factory_id\":3,\"meta_product_id\":null,\"sync_status\":\"pending\",\"sync_error_message\":null}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/by-sku/ZZTEST22813308",
+    "check": "product-update-by-sku",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZTEST22813308",
+    "status": 200,
+    "seconds": 0.03,
+    "verdict": "PASS",
+    "response": "{\"sku\":\"ZZTEST22813308\",\"category_code\":\"ZZ\",\"tags\":[\"محدث\"],\"title\":\"ZZ Test Product\",\"description\":\"安全 test record\",\"price\":1200.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\",\"additional_media_urls\":[],\"id\":227,\"factory_id\":3,\"meta_product_id\":null,\"sync_status\":\"pending\",\"sync_error_message\":null}"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/products/by-sku/ZZNOPE999",
+    "check": "product-missing-sku",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZNOPE999",
+    "status": 422,
+    "seconds": 0.006,
+    "verdict": "FAIL",
+    "response": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"title\"],\"msg\":\"String should have at least 2 characters\",\"input\":\"x\",\"ctx\":{\"min_length\":2}}]}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/posts/",
+    "check": "post-create",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 201,
+    "seconds": 0.02,
+    "verdict": "PASS",
+    "response": "{\"factory_id\":3,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":2,\"created_at\":\"2026-10-13T13:31:18.418237\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/2",
+    "check": "post-read",
+    "url": "http://127.0.0.1:8000/api/posts/2",
+    "status": 200,
+    "seconds": 0.008,
+    "verdict": "PASS",
+    "response": "{\"factory_id\":3,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":2,\"created_at\":\"2026-10-13T13:31:18.418237\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/",
+    "check": "post-list",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 200,
+    "seconds": 0.01,
+    "verdict": "PASS",
+    "response": "[{\"factory_id\":3,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":2,\"created_at\":\"2026-10-13T13:31:18.418237\"},{\"factory_id\":2,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST32033003/1\"],\"description\":null,\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":1,\"created_at\":\"2026-10-13T13:06:48.205236\"}]"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/posts/2",
+    "check": "post-update",
+    "url": "http://127.0.0.1:8000/api/posts/2",
+    "status": 200,
+    "seconds": 0.031,
+    "verdict": "PASS",
+    "response": "{\"factory_id\":3,\"media_type\":\"image\",\"media_urls\":[\"https://hadjretbladi.com/products/ZZ/ZZTEST22813308/1\"],\"description\":\"ZZ updated\",\"status\":\"draft\",\"approval\":\"pending\",\"published_at\":null,\"id\":2,\"created_at\":\"2026-10-13T13:31:18.418237\"}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/posts/",
+    "check": "post-empty-media",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 422,
+    "seconds": 0.006,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"too_short\",\"loc\":[\"body\",\"media_urls\"],\"msg\":\"List should have at least 1 item after validation, not 0\",\"input\":[],\"ctx\":{\"field_type\":\"List\",\"min_length\":1,\"actual_length\":0}}]}"
+  },
+  {
+    "method": "POST",
+    "path": "/api/posts/",
+    "check": "post-invalid-media-type",
+    "url": "http://127.0.0.1:8000/api/posts/",
+    "status": 422,
+    "seconds": 0.008,
+    "verdict": "PASS",
+    "response": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"media_type\"],\"msg\":\"Input should be 'image', 'gallery' or 'reel'\",\"input\":\"video\",\"ctx\":{\"expected\":\"'image', 'gallery' or 'reel'\"}}]}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/posts/999999999",
+    "check": "post-missing",
+    "url": "http://127.0.0.1:8000/api/posts/999999999",
+    "status": 404,
+    "seconds": 0.011,
+    "verdict": "PASS",
+    "response": "{\"detail\":\"المنشور غير موجود\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/posts/2",
+    "check": "cleanup",
+    "url": "http://127.0.0.1:8000/api/posts/2",
+    "status": 200,
+    "seconds": 0.027,
+    "verdict": "PASS",
+    "response": "{\"status\":\"success\",\"message\":\"تم حذف المنشور بنجاح\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/products/by-sku/ZZTEST22813308",
+    "check": "cleanup",
+    "url": "http://127.0.0.1:8000/api/products/by-sku/ZZTEST22813308",
+    "status": 200,
+    "seconds": 0.025,
+    "verdict": "PASS",
+    "response": "{\"status\":\"success\",\"sku\":\"ZZTEST22813308\",\"message\":\"تم حذف المنتج بنجاح\"}"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/factories/3",
+    "check": "cleanup",
+    "url": "http://127.0.0.1:8000/api/factories/3",
+    "status": 200,
+    "seconds": 0.045,
+    "verdict": "PASS",
+    "response": "{\"status\":\"success\",\"message\":\"تم حذف المصنع بنجاح\"}"
+  },
+  {
+    "method": "GET",
+    "path": "/api/products/admin",
+    "check": "verify-product-cleanup",
+    "url": "http://127.0.0.1:8000/api/products/admin?limit=500",
+    "status": 200,
+    "seconds": 0.042,
+    "verdict": "PASS",
+    "response": "[{\"sku\":\"B001\",\"category_code\":\"UNCATEGORIZED\",\"tags\":[],\"title\":\"بارا بريت\",\"description\":\"بارا بريت - توريد مباشر من مصنع string\",\"price\":3500.0,\"currency\":\"DZD\",\"availability\":\"in stock\",\"condition\":\"new\",\"brand\":\"Hojrat Bladi\",\"primary_media_url\":\"https://hadjretbladi.com/B001/1.jpg\",\"additional_media_urls\":[\"https://hadjretbladi.com/B001/2.jpg\",\"https://hadjretbladi.com/B001/3.jpg\",\"https://hadjretbladi.com/B001/4.jpg\",\"https://hadjretbladi.com/B001/5.jpg\",\"https://hadjretbladi.com/B001/6.j"
+  }
+]
