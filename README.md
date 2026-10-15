@@ -1,0 +1,189 @@
+# Hojrat Bladi API (حجرة بلادي)
+
+الخلفية والبوتات لمتجر "حجرة بلادي": FastAPI + SQLite + كتالوج Meta + بوتات المصانع.
+المرجع الكامل للمشروع: `hadjretbladi-project-brief.md` (في مشروع Claude). شرح الفصل بين الطبقات وكيفية إضافة قناة: `ARCHITECTURE.md`.
+
+كل الأوامر تُنفَّذ **من جذر المشروع** (المجلد الذي فيه `alembic.ini`).
+
+---
+
+## 1. بنية المشروع
+
+```
+abohajar/
+├── app/
+│   ├── main.py              تطبيق FastAPI: CORS، ترجمة أخطاء الخدمات إلى HTTP، تسجيل المسارات، /health
+│   ├── models.py            جداول SQLAlchemy (Factory, FactoryContact, Product, Post, Order, ...)
+│   ├── schemas.py           مخططات Pydantic للمدخلات والمخرجات
+│   ├── core/
+│   │   ├── config.py        كل الإعدادات من .env (+ settings.validate() عند الإقلاع)
+│   │   ├── database.py      engine وSessionLocal وget_db
+│   │   └── security.py      require_admin (X-API-Key) والتحقق من توقيع webhook ميتا
+│   ├── routers/             طبقة HTTP رقيقة: تحقق مدخلات ← استدعاء خدمة ← استجابة
+│   │   ├── products.py        /api/products (القراءة العامة + الإدارة + مزامنة ميتا + رفع CSV)
+│   │   ├── factories.py       /api/factories وجهات اتصالها /contacts
+│   │   ├── posts.py           /api/posts
+│   │   └── webhook.py         /webhook (واتساب)
+│   ├── channels/            التحدث مع المصانع عبر قنوات المحادثة
+│   │   ├── base.py            العقد: IncomingEvent و ChannelClient
+│   │   ├── factory_flow.py    سير المحادثة المشترك بين كل القنوات
+│   │   ├── texts.py           نصوص الردود العربية
+│   │   └── whatsapp/          adapter.py (حمولة ميتا ← حدث موحّد) و client.py (إرسال/تنزيل)
+│   └── services/            منطق العمل (لا يعرف HTTP ولا أي قناة)
+│       ├── errors.py          NotFound / Duplicate / Conflict / InvalidInput
+│       ├── products.py        CRUD المنتجات، parse_caption، upsert، import_csv
+│       ├── factories.py       المصانع وجهات الاتصال، find_by_contact
+│       ├── product_intake.py  استقبال منتج من مصنع (تحقق، سؤال التحديث، حفظ، مزامنة)
+│       ├── import_job.py      الاستيراد التلقائي كمهمة إدارية (مع قفل)
+│       ├── media.py           حفظ الصور على القرص وبناء الروابط العامة
+│       ├── media_scan.py / media_import.py / import_report.py   فحص المجلد + CSV واستيراده
+│       ├── meta.py            مزامنة كتالوج ميتا (Graph API)
+│       ├── admin_command.py   التعرف على أمر المدير النصي
+│       └── dedup.py           منع معالجة الرسائل المكررة
+├── alembic/                 ترحيلات المخطط (versions/)
+├── scripts/import_from_media.py   استيراد المنتجات من مجلد الصور وCSV (طرفية)
+├── tests/                   اختبارات الوحدة (unittest)
+├── test_api.py              فاحص مسارات الـ API على خادم يعمل (ليس اختبار وحدة)
+├── requirements.txt
+└── .env.example
+```
+
+الاتجاه المسموح للاستيراد: `routers, channels → services → models/core`. يحرسه `tests/test_architecture.py`.
+
+---
+
+## 2. التجهيز لأول مرة
+
+```bash
+# 1) بيئة افتراضية وتثبيت الاعتماديات
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 2) ملف الإعدادات
+cp .env.example .env
+nano .env        # املأ القيم (انظر الجدول أدناه)
+
+# 3) إنشاء قاعدة البيانات / ترحيلها إلى آخر نسخة
+alembic upgrade head
+```
+
+> **مهم:** `alembic` يقرأ رابط القاعدة من `alembic.ini` (`sqlalchemy.url = sqlite:///./hojrat_bladi.db`) وليس من `.env`. شغّله من جذر المشروع، وإن غيّرت `DATABASE_URL` في `.env` فغيّرها في `alembic.ini` أيضاً.
+> قبل ترحيل على قاعدة فيها بيانات حقيقية: `cp hojrat_bladi.db hojrat_bladi.db.bak-$(date +%Y%m%d-%H%M%S)`.
+
+### المتغيرات الإلزامية (يتوقف التشغيل إن نقص أحدها)
+
+`VERIFY_TOKEN`, `META_APP_SECRET`, `META_ACCESS_TOKEN`, `META_CATALOG_ID`, `WHATSAPP_PHONE_NUMBER_ID`, `ADMIN_API_KEY`, `BASE_URL`, `IMAGE_BASE_URL`, `MEDIA_ROOT`.
+`MEDIA_ROOT` يجب أن يكون مجلداً موجوداً وقابلاً للكتابة (لا يُنشأ تلقائياً). أمثلة وقيم افتراضية لباقي المتغيرات في `.env.example`.
+
+للتجربة المحلية بلا حسابات ميتا يكفي وضع قيم وهمية (غير فارغة) للمتغيرات أعلاه، مع مجلد حقيقي لـ `MEDIA_ROOT`:
+
+```bash
+mkdir -p ~/media/products
+```
+
+---
+
+## 3. تشغيل المشروع
+
+```bash
+source venv/bin/activate
+
+# تطوير (إعادة تحميل تلقائية)
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# إنتاج (خلف Nginx، عبر systemd)
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+التحقق:
+
+```bash
+curl http://127.0.0.1:8000/health          # {"status":"ok"}
+# التوثيق التفاعلي: http://127.0.0.1:8000/docs
+```
+
+### الاستيراد من مجلد الصور وCSV
+
+```bash
+python -m scripts.import_from_media                  # تجربة فقط، لا يكتب شيئاً
+python -m scripts.import_from_media --apply          # كتابة فعلية (مع نسخة احتياطية للقاعدة)
+python -m scripts.import_from_media --apply --sync   # ثم مزامنة ميتا
+python -m scripts.import_from_media --help           # --factory-id --csv --verbose
+```
+
+يحتاج `PRODUCTS_CSV_PATH` و`DEFAULT_FACTORY_ID` في `.env` (أو الخيارين `--csv` و`--factory-id`)، ومصنعاً موجوداً في القاعدة.
+
+### تسجيل مصنع وربط قنواته (مثال)
+
+```bash
+KEY=<ADMIN_API_KEY>; API=http://127.0.0.1:8000
+
+# إنشاء مصنع (رقمه يصبح جهة واتساب تلقائياً)
+curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"name":"مصنع الاختبار","phone_number":"+213550000000"}'
+
+# ربط تيليجرام (معرّف المستخدم الرقمي)
+curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"channel":"telegram","identifier":"123456789"}'
+```
+
+---
+
+## 4. تشغيل الاختبارات (وحدة)
+
+لا تحتاج خادماً ولا شبكة ولا قاعدة بيانات حقيقية:
+
+```bash
+source venv/bin/activate
+
+python -m unittest discover -s tests -v        # كل الاختبارات
+python -m unittest tests.test_factory_flow -v  # ملف واحد
+python -m unittest tests.test_architecture -v  # حراس فصل الطبقات
+```
+
+| الملف | يغطي |
+|---|---|
+| `test_architecture.py` | اتجاه الاستيراد بين الطبقات |
+| `test_factory_flow.py` | سير محادثة المصنع بقناة وهمية (واتساب وتيليجرام) |
+| `test_whatsapp_adapter.py` | تحويل رسائل واتساب إلى أحداث موحّدة |
+| `test_admin_command.py` | أمر المدير وتقييد المرسلين |
+| `test_config.py` | التحقق من الإعدادات، `ADMIN_CONTACTS`، رابط المنتج |
+| `test_media.py`, `test_media_scan.py`, `test_import_report.py` | الوسائط والاستيراد والتقرير |
+
+---
+
+## 5. فحص الـ API (`test_api.py`)
+
+سكربت يفحص مسارات خادم **يعمل فعلاً** (محلي أو الإنتاج). الوضع الافتراضي **قراءة فقط**: يقرأ OpenAPI ويفحص حماية مسارات الإدارة والمسارات العامة والتحقق من المدخلات وwebhook بتوقيع خاطئ. يكتب النتائج في `results.json` و`results.md`.
+
+شغّل الخادم أولاً (الفقرة 3)، ثم في طرفية أخرى:
+
+```bash
+export API_KEY='<نفس قيمة ADMIN_API_KEY>'
+
+# قراءة فقط (آمن)
+python3 test_api.py http://127.0.0.1:8000
+python3 test_api.py https://api.hadjretbladi.com
+
+# خيارات
+python3 test_api.py http://127.0.0.1:8000 --sku B001 --product-id 1   # منتج موجود للفحوص القرائية
+python3 test_api.py http://127.0.0.1:8000 --key '<KEY>'               # بدل المتغير
+
+# دورة CRUD كاملة على مصنع ومنتج ومنشور تجريبية ثم حذفها (على قاعدة تطوير فقط)
+python3 test_api.py http://127.0.0.1:8000 --write --yes
+
+# يضيف اختبار مزامنة منتج واحد (قد يتصل بميتا فعلاً)
+python3 test_api.py http://127.0.0.1:8000 --write --yes --include-sync
+```
+
+لا ينفّذ أبداً: `DELETE /api/products/clear-all?confirm=true`، ولا `POST /api/products/sync-meta/all`، ولا رفع CSV صالح، ولا webhook بتوقيع صحيح.
+`--write` بدون `--yes` يسألك للتأكيد (`y`) قبل الكتابة. لا تشغّل `--write` على قاعدة الإنتاج.
+
+---
+
+## 6. ملاحظات
+
+- مسارات القراءة العامة: `GET /api/products/` و`GET /api/products/{sku}`. مسارات الإدارة تتطلب ترويسة `X-API-Key`.
+- الصور تخدمها Nginx مباشرة من `MEDIA_ROOT` (لا FastAPI)، والرابط العام `{IMAGE_BASE_URL}/{SKU}/{n}.{ext}`.
+- إضافة قناة جديدة أو ميزة جديدة: انظر `ARCHITECTURE.md`.
