@@ -3,7 +3,7 @@
 scan_structure.py
 architecture.json
 results.md
-test_api.py
+results.json
 # Python Virtual Environment
 venv/
 .venv/
