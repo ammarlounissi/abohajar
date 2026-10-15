@@ -1,4 +1,7 @@
-"""منطق المنتجات المشترك بين رفع CSV ورسائل واتساب."""
+"""منطق المنتجات المشترك بين كل القنوات (API، رفع CSV، بوتات المصانع، لوحة التحكم).
+
+اتفاقية الحفظ: create_/update_/delete_ تنفّذ commit بنفسها؛ أما upsert_/import_csv فلا،
+لأن المستدعي يكتب ملفات الوسائط أولاً ثم يحفظ، فإن فشلت الكتابة تراجع عن القاعدة."""
 import csv
 import io
 import re
@@ -10,6 +13,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.core.config import settings
 from app.services import media
+from app.services.errors import DuplicateError, InvalidInputError, NotFoundError
 
 # فاصل يجب أن يحيط به مسافات (أو سطر جديد) حتى لا ينكسر SKU مثل STONE-GLM-01
 _CAPTION_SPLIT = re.compile(r"\s+[-–—|]\s+|\n")
@@ -143,3 +147,79 @@ def import_csv(db: Session, factory: models.Factory, content: bytes):
         "total_errors": len(errors),
     }
     return {"summary": summary, "errors": errors}, touched
+
+
+# --- عمليات CRUD (يستعملها الـ API ولوحة التحكم لاحقاً) ---
+
+def normalize_sku(sku: str) -> str:
+    """SKU موحّد بأحرف كبيرة، وإلا InvalidInputError."""
+    normalized = (sku or "").strip().upper()
+    if not re.fullmatch(schemas.SKU_PATTERN, normalized):
+        raise InvalidInputError("رمز SKU غير صالح")
+    return normalized
+
+
+def get_product(db: Session, product_id: int) -> models.Product:
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise NotFoundError("المنتج غير موجود")
+    return product
+
+
+def get_product_by_sku(db: Session, sku: str) -> models.Product:
+    product = db.query(models.Product).filter(models.Product.sku == normalize_sku(sku)).first()
+    if not product:
+        raise NotFoundError("المنتج غير موجود")
+    return product
+
+
+def list_products(
+    db: Session, *, skip: int = 0, limit: int = 100,
+    category_code: Optional[str] = None, tag: Optional[str] = None,
+) -> List[models.Product]:
+    query = db.query(models.Product)
+    if category_code:
+        query = query.filter(models.Product.category_code == category_code.strip().upper())
+    if tag:
+        query = query.filter(models.Product.tags.contains([tag.strip()]))
+    return query.order_by(models.Product.id).offset(skip).limit(limit).all()
+
+
+def create_product(db: Session, data: schemas.ProductCreate) -> models.Product:
+    if not db.query(models.Factory).filter(models.Factory.id == data.factory_id).first():
+        raise NotFoundError("المصنع غير موجود")
+    if db.query(models.Product).filter(models.Product.sku == data.sku).first():
+        raise DuplicateError("رمز SKU مستخدم مسبقاً")
+    product = models.Product(**data.model_dump())
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+def update_product(db: Session, product: models.Product, values: dict) -> models.Product:
+    """values: الحقول المراد تغييرها فقط. أي تعديل يعيد حالة المزامنة إلى pending."""
+    for key, value in values.items():
+        setattr(product, key, value)
+    product.sync_status = models.SyncStatus.PENDING
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+def delete_product(db: Session, product: models.Product) -> str:
+    """يحذف من قاعدة البيانات المحلية فقط (لا من كتالوج ميتا ولا ملفات الوسائط). يُعيد الـ SKU."""
+    sku = product.sku
+    db.delete(product)
+    db.commit()
+    return sku
+
+
+def delete_all_products(db: Session) -> int:
+    deleted = db.query(models.Product).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
+def all_product_ids(db: Session) -> List[int]:
+    return [row.id for row in db.query(models.Product.id).all()]

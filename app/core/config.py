@@ -24,6 +24,17 @@ def _get_int(name: str):
     return int(value)
 
 
+def _get_contacts(name: str) -> dict:
+    """'telegram:123,whatsapp:+213 55...' -> {'telegram': ['123'], 'whatsapp': ['21355...']}."""
+    result: dict = {}
+    for item in _get(name).split(","):
+        channel, _, ident = item.strip().partition(":")
+        channel, ident = channel.strip().lower(), ident.strip()
+        if channel and ident:
+            result.setdefault(channel, []).append(re.sub(r"\D", "", ident) if channel == "whatsapp" else ident)
+    return result
+
+
 class Settings:
     DATABASE_URL = _get("DATABASE_URL", f"sqlite:///{BASE_DIR / 'hojrat_bladi.db'}")
 
@@ -41,7 +52,7 @@ class Settings:
     o.strip( )
     for o in _get(
         "ALLOWED_ORIGINS",
-        "https://hadjretbladi.com,https://www.hadjretbladi.com,https://store.hadjretbladi.com",
+        "https://hadjretbladi.com,https://www.hadjretbladi.com",
      ).split(",")
     if o.strip()
 ]
@@ -49,7 +60,7 @@ class Settings:
     # الروابط العامة
     BASE_URL = _get("BASE_URL").rstrip("/")             # عنوان هذا الـ API العام
     PRODUCT_LINK_TEMPLATE = _get(
-        "PRODUCT_LINK_TEMPLATE", "https://store.hadjretbladi.com/{sku}"
+        "PRODUCT_LINK_TEMPLATE", "https://hadjretbladi.com/{SKU}/"
     )
 
     # قاعدة روابط صور المنتجات: {IMAGE_BASE_URL}/{SKU}/{الرقم}.{الامتداد}  (مثل https://hadjretbladi.com/B001/1.jpg)
@@ -81,6 +92,10 @@ class Settings:
         d for d in (re.sub(r"\D", "", n) for n in _get("ADMIN_PHONE_NUMBERS").split(",")) if d
     ]
 
+    # اختياري: مرسلون مسموح لهم بالأمر في قنوات أخرى، بصيغة channel:id مفصولة بفواصل،
+    # مثل telegram:123456789,whatsapp:213550000000. يُضاف إليها ADMIN_PHONE_NUMBERS لواتساب.
+    ADMIN_CONTACTS = _get_contacts("ADMIN_CONTACTS")
+
     # المجلدات
     STATIC_DIR = BASE_DIR / "static"
     UPLOADS_DIR = STATIC_DIR / "uploads" / "factories"   # قديم: لم يعد يُستعمل لصور المنتجات
@@ -96,6 +111,10 @@ class Settings:
         "IMAGE_BASE_URL",
         "MEDIA_ROOT",
     )
+
+    def product_link(self, sku: str) -> str:
+        """رابط صفحة المنتج من PRODUCT_LINK_TEMPLATE. يقبل {SKU} أو {sku} (الأول هو المعتمد في الوثيقة)."""
+        return self.PRODUCT_LINK_TEMPLATE.replace("{SKU}", sku).replace("{sku}", sku)
 
     @property
     def graph_url(self) -> str:

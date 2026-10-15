@@ -3,10 +3,19 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+
+
+class Channel(str, enum.Enum):
+    """قنوات التواصل مع المصانع. تُخزَّن في قاعدة البيانات نصاً عادياً (لا Enum في العمود)
+    كي لا تحتاج قناة جديدة إلى ترحيل مخطط."""
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    EMAIL = "email"
 
 
 class SyncStatus(str, enum.Enum):
@@ -45,6 +54,7 @@ class Factory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
+    # قديم: رقم واتساب الأساسي. مصدر الحقيقة لتعريف المصنع في القنوات هو factory_contacts.
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
     address = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
@@ -52,6 +62,22 @@ class Factory(Base):
 
     products = relationship("Product", back_populates="factory")
     posts = relationship("Post", back_populates="factory")
+    contacts = relationship("FactoryContact", back_populates="factory", cascade="all, delete-orphan")
+
+
+class FactoryContact(Base):
+    """جهة اتصال للمصنع في قناة ما (واتساب/تيليجرام/بريد). المصنع الواحد قد يملك عدة قنوات،
+    وإضافة قناة جديدة لا تغيّر المخطط. identifier مُطبَّع حسب القناة (انظر services/factories.py)."""
+    __tablename__ = "factory_contacts"
+    __table_args__ = (UniqueConstraint("channel", "identifier", name="uq_factory_contacts_channel_identifier"),)
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    channel = Column(String(20), nullable=False)
+    identifier = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    factory = relationship("Factory", back_populates="contacts")
 
 
 class Product(Base):
@@ -119,7 +145,8 @@ class Order(Base):
 
 
 class ProcessedMessage(Base):
-    """رسائل واتساب التي عولجت، لمنع المعالجة المكررة عند إعادة إرسال ميتا للـ webhook"""
+    """رسائل القنوات التي عولجت، لمنع المعالجة المكررة عند إعادة إرسال الـ webhook.
+    المفتاح بصيغة "{channel}:{message_id}"."""
     __tablename__ = "processed_messages"
 
     id = Column(Integer, primary_key=True)
@@ -129,7 +156,8 @@ class ProcessedMessage(Base):
 
 class PendingMediaUpdate(Base):
     """طلب إضافة بصورة لمنتج (أو مجلد) موجود مسبقاً، ينتظر جواب المصنع بنعم أو لا.
-    لا نحمّل الصورة قبل الموافقة: نحفظ media_id فقط (صالح عند ميتا نحو 30 يوماً)."""
+    لا نحمّل الصورة قبل الموافقة: نحفظ مرجعها في القناة فقط (media_ref: معرّف ميتا أو file_id في تيليجرام)،
+    ويرتبط الطلب بالقناة التي جاء منها فلا يُجاب من قناة أخرى."""
     __tablename__ = "pending_media_updates"
 
     id = Column(Integer, primary_key=True)
@@ -137,5 +165,6 @@ class PendingMediaUpdate(Base):
     sku = Column(String(50), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     price = Column(Float, nullable=False)
-    media_id = Column(String(128), nullable=False)
+    channel = Column(String(20), nullable=False, default=Channel.WHATSAPP.value)
+    media_ref = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

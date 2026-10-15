@@ -6,7 +6,7 @@ from fastapi.responses import PlainTextResponse
 
 from app.core.config import settings
 from app.core.security import verify_signature
-from app.services.webhook_handler import process_payload
+from app.channels.whatsapp.adapter import process_payload
 
 router = APIRouter(tags=["webhook"])
 

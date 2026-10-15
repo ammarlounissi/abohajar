@@ -22,7 +22,7 @@ def _build_payload(product: models.Product) -> dict:
         "price": int(round(product.price * 100)),
         "currency": product.currency or "DZD",
         # رابط صفحة المنتج في المتجر (وليس رابط الصورة)
-        "url": settings.PRODUCT_LINK_TEMPLATE.format(sku=product.sku),
+        "url": settings.product_link(product.sku),
         "image_url": product.primary_media_url,
         "brand": product.brand or "Hojrat Bladi",
     }

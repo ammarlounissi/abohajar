@@ -3,7 +3,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import Availability, PostApproval, PostStatus, SyncStatus
+from app.models import Availability, Channel, PostApproval, PostStatus, SyncStatus
 
 SKU_PATTERN = r"^[A-Z0-9][A-Z0-9_-]{1,49}$"   # مثال: STONE-GLM-01
 
@@ -31,6 +31,20 @@ class FactoryResponse(FactoryBase):
 
     id: int
     is_active: bool
+
+
+class FactoryContactCreate(BaseModel):
+    channel: Channel
+    identifier: str = Field(min_length=1, max_length=100)
+
+
+class FactoryContactResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    factory_id: int
+    channel: str
+    identifier: str
 
 
 # --- المنتجات ---
