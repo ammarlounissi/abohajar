@@ -1,0 +1,8 @@
+[Unit]
+Description=Hadjret Bladi scheduled social publishing
+
+[Service]
+Type=oneshot
+User=fastapi_user
+WorkingDirectory=/home/ammar/abohajar
+ExecStart=/home/ammar/abohajar/.venv/bin/python -m app.jobs.publish_due

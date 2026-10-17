@@ -46,6 +46,12 @@ class Settings:
     WHATSAPP_PHONE_NUMBER_ID = _get("WHATSAPP_PHONE_NUMBER_ID")
     GRAPH_API_VERSION = _get("GRAPH_API_VERSION", "v19.0")
 
+    # النشر على فيسبوك وإنستغرام (كل منصة اختيارية: تفشل عمليتها بسبب واضح إن نقص معرّفها)
+    META_PAGE_ID = _get("META_PAGE_ID")            # معرّف صفحة فيسبوك
+    META_IG_USER_ID = _get("META_IG_USER_ID")      # معرّف حساب إنستغرام (رقم مختلف عن الصفحة)
+    PUBLISH_DAILY_LIMIT = _get_int("PUBLISH_DAILY_LIMIT") or 50   # أقصى منشورات تُحجز كل 24 ساعة (حد إنستغرام ~100)
+    PUBLISH_STALE_MINUTES = _get_int("PUBLISH_STALE_MINUTES") or 30  # بعدها يُعدّ publishing عالقاً
+
     # الأمان
     ADMIN_API_KEY = _get("ADMIN_API_KEY")
     ALLOWED_ORIGINS = [

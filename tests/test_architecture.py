@@ -36,7 +36,7 @@ def violations(folder: str, forbidden: tuple):
 class LayeringTests(unittest.TestCase):
     def test_services_know_no_channel_or_http(self):
         self.assertEqual(violations("services", (
-            "app.channels", "app.routers", "fastapi", "starlette",
+            "app.channels", "app.routers", "app.jobs", "fastapi", "starlette",
         )), [])
 
     def test_routers_go_through_services(self):

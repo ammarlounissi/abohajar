@@ -1,11 +1,12 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.database import get_db
 from app.core.security import require_admin
+from app.services import post_publisher
 
 router = APIRouter(
     prefix="/api/posts",
@@ -28,6 +29,33 @@ def create_post(post: schemas.PostCreate, db: Session = Depends(get_db)):
 @router.get("/", response_model=List[schemas.PostResponse])
 def get_posts(db: Session = Depends(get_db)):
     return db.query(models.Post).order_by(models.Post.created_at.desc()).all()
+
+
+# المسارات الثابتة قبل /{post_id} كي لا تُفسَّر "published" رقماً
+@router.get("/published", response_model=List[schemas.PostResponse])
+def get_published_posts(
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db),
+):
+    """المنشورات التي نُشرت، الأحدث نشراً أولاً."""
+    return post_publisher.list_published(db, limit, offset)
+
+
+@router.get("/unpublished", response_model=List[schemas.PostResponse])
+def get_unpublished_posts(
+    limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db),
+):
+    """غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة)."""
+    return post_publisher.list_unpublished(db, limit, offset)
+
+
+@router.post("/{post_id}/publish", response_model=schemas.PostResponse, status_code=status.HTTP_202_ACCEPTED)
+def publish_post_now(post_id: int, background: BackgroundTasks, db: Session = Depends(get_db)):
+    """نشر يدوي فوري. يحجز المنشور ويرجع 202 بحالة publishing، والنشر يجري في الخلفية؛
+    تابع النتيجة بـ GET /api/posts/{id} (حقل deliveries). يقبل draft وscheduled وapproved وfailed
+    (الفاشل تُنشر منصاته الفاشلة وحدها)، ويتجاوز الموعد والسقف اليومي."""
+    post = post_publisher.claim_post(db, post_id)
+    background.add_task(post_publisher.publish_claimed_in_background, post_id)
+    return post
 
 
 @router.get("/{post_id}", response_model=schemas.PostResponse)

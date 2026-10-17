@@ -1,0 +1,10 @@
+# نسخة الاختبار (كل 5 دقائق): استبدل بها سطر OnCalendar في ملف المؤقت أثناء الاختبار فقط.
+[Unit]
+Description=TEST publish every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

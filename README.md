@@ -23,6 +23,7 @@ abohajar/
 │   │   ├── products.py        /api/products (القراءة العامة + الإدارة + مزامنة ميتا + رفع CSV)
 │   │   ├── factories.py       /api/factories وجهات اتصالها /contacts
 │   │   ├── posts.py           /api/posts
+│   ├── jobs/                  نقاط دخول الطرفية: publish_due وposts (النشر التلقائي)
 │   │   └── webhook.py         /webhook (واتساب)
 │   ├── channels/            التحدث مع المصانع عبر قنوات المحادثة
 │   │   ├── base.py            العقد: IncomingEvent و ChannelClient
@@ -179,6 +180,54 @@ python3 test_api.py http://127.0.0.1:8000 --write --yes --include-sync
 
 لا ينفّذ أبداً: `DELETE /api/products/clear-all?confirm=true`، ولا `POST /api/products/sync-meta/all`، ولا رفع CSV صالح، ولا webhook بتوقيع صحيح.
 `--write` بدون `--yes` يسألك للتأكيد (`y`) قبل الكتابة. لا تشغّل `--write` على قاعدة الإنتاج.
+
+---
+
+## النشر التلقائي (فيسبوك وإنستغرام)
+
+سكريبت يومي ينشر منشوراً واحداً جاهزاً من جدول `posts`. الكود: `app/services/social/` (محوّل لكل منصة) و`app/services/post_publisher.py` (الحجز والحالات والتقارير) و`app/jobs/` (نقطتا الدخول).
+
+```bash
+# 1) نسخة احتياطية من القاعدة بختم زمني ثم الترحيل
+cp hojrat_bladi.db "hojrat_bladi.db.$(date +%Y%m%d-%H%M%S).bak"
+alembic upgrade head
+
+# 2) ضبط META_PAGE_ID وMETA_IG_USER_ID في .env ثم إعادة تشغيل FastAPI (انظر .env.example)
+
+# 3) دورة العمل
+python -m app.jobs.posts list --status draft
+python -m app.jobs.posts approve 12          # draft/scheduled/failed -> approved
+python -m app.jobs.publish_due --dry-run     # يعرض ما سيُنشر ونتيجة التحقق المسبق، بلا حجز
+python -m app.jobs.publish_due               # نشر فعلي
+python -m app.jobs.posts show 12             # حالة كل منصة وآخر خطأ
+```
+
+**مسارات الـ API (كلها بـ `X-API-Key`):**
+
+| المسار | الوظيفة |
+| --- | --- |
+| `GET /api/posts/` | كل المنشورات |
+| `GET /api/posts/published` | المنشورة فقط (الأحدث نشرًا أولًا)، مع `limit` و`offset` |
+| `GET /api/posts/unpublished` | غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة) |
+| `GET /api/posts/{id}` | منشور واحد مع `deliveries` (حالة كل منصة) |
+| `POST /api/posts/{id}/publish` | نشر يدوي فوري: يرجع 202 بحالة publishing والنشر في الخلفية؛ تابعه بـ GET السابق. يتجاوز الموعد والسقف اليومي، ويرفض المنشور أو قيد النشر بـ 409 |
+
+**منشورات تجريبية:**
+
+```bash
+python -m scripts.seed_posts                                  # عرض فقط
+python -m scripts.seed_posts --apply --video-url <MP4_URL>    # مسودات (الفيديو اختياري)
+python -m scripts.seed_posts --apply --approve --with-failures
+python -m scripts.seed_posts --clear --apply                  # حذف منشورات [TEST-n] من القاعدة
+```
+تنبيه: `--approve` ثم تشغيل الناشر ينشر فعلًا على الصفحة الحقيقية.
+
+
+- **الحالات:** `draft` ← `approved` ← `publishing` ← `published` أو `failed`. النص هو `posts.description`، والمنصات `posts.platforms` مثل `facebook,instagram`، وأنواع الوسائط `text|image|reel` (`gallery` غير مدعوم في هذه المرحلة).
+- **إعادة محاولة الفاشل:** `python -m app.jobs.posts approve <id>` فتُنشر المنصة الفاشلة وحدها (الناجحة محفوظة في `post_deliveries`).
+- **العالقون:** منشور بقي `publishing` أكثر من `PUBLISH_STALE_MINUTES` لا يُعاد نشره تلقائياً (ربما نُشر)؛ يُكتب له تقرير في `publish_reports` ويظهر في مخرجات التشغيل.
+- **التقارير:** `publish_reports.kind` = `token` (كود 190/463/467) أو `media` أو `limit` أو `network` أو `unknown`، و`sent_at` فارغ حتى تُبنى قناة الإرسال.
+- **الجدولة:** ملفات systemd في `deploy/systemd/` (07:00 UTC = 08:00 الجزائر)؛ انظر التفعيل في أعلى كل ملف ووثيقة المرحلة.
 
 ---
 

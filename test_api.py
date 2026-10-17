@@ -11,7 +11,10 @@
 - يختبر المسارات العامة، التصفية، كشف الحقول الحساسة، والتحقق من المدخلات.
 - يختبر Webhook ببيانات اعتماد وتوقيع غير صحيحين فقط.
 
---write ينفذ دورة CRUD على مصنع ومنتج ومنشور تجريبي ثم يحذفها.
+--write ينفذ دورة CRUD على مصنع ومنتج ومنشور تجريبي ثم يحذفها، ويفحص مسارات المنشورات:
+  /api/posts/published و/api/posts/unpublished وحقل deliveries والتحقق من المدخلات،
+  و POST /api/posts/{id}/publish بحالات الرفض فقط (404 و422 و409).
+  لا يُنفَّذ نشر فعلي أبداً (202)، فلا اتصال بـ Meta ولا منشور على الصفحة.
 --include-sync يختبر مزامنة منتج واحد فقط، وقد يتصل بـ Meta.
 
 لا يشغّل هذا الفاحص:
@@ -342,7 +345,7 @@ def main():
             step("product-list-admin", "GET", "/api/products/admin", query={"limit": 500})
             step("product-duplicate-sku", "POST", "/api/products/", product_body, expected=(400, 499))
             step("product-invalid-category", "POST", "/api/products/",
-                 {**product_body, "sku": sku + "X", "category_code": "bad category"}, expected=(422, 422))
+                 {**product_body, "sku": sku + "XX", "category_code": "bad category"}, expected=(422, 422))
             step("product-empty-tag", "PATCH", f"/api/products/by-sku/{sku}", {"tags": [""]}, expected=(422, 422))
             step("product-update-by-id", "PATCH", f"/api/products/{ids['product']}", {"price": 1200})
             step("product-update-by-sku", "PATCH", f"/api/products/by-sku/{sku}", {"tags": ["محدث"]})
@@ -366,6 +369,57 @@ def main():
                     step("post-empty-media", "POST", "/api/posts/", {**post_body, "media_urls": []}, expected=(422, 422))
                     step("post-invalid-media-type", "POST", "/api/posts/", {**post_body, "media_type": "video"}, expected=(422, 422))
                     step("post-missing", "GET", f"/api/posts/{BOGUS_ID}", expected=(404, 404))
+
+                    # --- مسارات القوائم والنشر اليدوي (حالات آمنة فقط، لا نشر فعلي) ---
+                    if route_exists("/api/posts/published", "get"):
+                        def check(label, path, ok, note):
+                            add("GET", path, label, base + path, 200, 0, note, "PASS" if ok else "FAIL")
+
+                        def ids_of(payload):
+                            return {item.get("id") for item in payload} if isinstance(payload, list) else set()
+
+                        step("post-list-limit-over-max", "GET", "/api/posts/published",
+                             query={"limit": 501}, expected=(422, 422))
+                        step("post-list-negative-offset", "GET", "/api/posts/unpublished",
+                             query={"offset": -1}, expected=(422, 422))
+                        step("post-invalid-platforms", "POST", "/api/posts/",
+                             {**post_body, "platforms": "Face Book!"}, expected=(422, 422))
+                        step("post-text-with-media", "POST", "/api/posts/",
+                             {**post_body, "media_type": "text"}, expected=(422, 422))
+
+                        # منشور المسودة: في غير المنشورة وليس في المنشورة، وله حقل deliveries
+                        _, unpub = step("post-list-unpublished", "GET", "/api/posts/unpublished", query={"limit": 500})
+                        _, pub = step("post-list-published", "GET", "/api/posts/published", query={"limit": 500})
+                        check("draft-in-unpublished-only", "/api/posts/unpublished",
+                              post_id in ids_of(unpub) and post_id not in ids_of(pub),
+                              f"post {post_id} must be only in unpublished")
+                        _, detail = step("post-detail-has-deliveries", "GET", f"/api/posts/{post_id}")
+                        check("detail-deliveries-field", f"/api/posts/{post_id}",
+                              isinstance(detail, dict) and detail.get("deliveries") == [],
+                              "deliveries must be an empty list for an unpublished post")
+
+                        # النشر اليدوي: الرفض فقط
+                        step("post-publish-missing", "POST", f"/api/posts/{BOGUS_ID}/publish", expected=(404, 404))
+                        step("post-publish-no-platforms", "POST", f"/api/posts/{post_id}/publish", expected=(422, 422))
+                        _, after = step("post-still-draft-after-reject", "GET", f"/api/posts/{post_id}")
+                        check("rejected-publish-left-draft", f"/api/posts/{post_id}",
+                              isinstance(after, dict) and after.get("status") == "draft",
+                              "a rejected publish must not change status")
+
+                        # منشور بحالة published (يُنشأ مباشرة بلا نشر فعلي): يظهر في المنشورة ويُرفض نشره بـ 409
+                        st, done = step("post-create-published", "POST", "/api/posts/",
+                                        {**post_body, "platforms": "facebook", "status": "published"},
+                                        expected=(201, 201))
+                        done_id = done.get("id") if isinstance(done, dict) else None
+                        if done_id:
+                            cleanup.insert(0, ("DELETE", f"/api/posts/{done_id}"))
+                            _, pub = step("post-list-published-2", "GET", "/api/posts/published", query={"limit": 500})
+                            _, unpub = step("post-list-unpublished-2", "GET", "/api/posts/unpublished", query={"limit": 500})
+                            check("published-in-published-only", "/api/posts/published",
+                                  done_id in ids_of(pub) and done_id not in ids_of(unpub),
+                                  f"post {done_id} must be only in published")
+                            step("post-publish-already-published", "POST", f"/api/posts/{done_id}/publish",
+                                 expected=(409, 409))
         finally:
             for method, path in cleanup:
                 step("cleanup", method, path, expected=(200, 299))

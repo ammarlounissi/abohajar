@@ -36,10 +36,32 @@ class OrderStatus(str, enum.Enum):
 
 
 class PostStatus(str, enum.Enum):
+    """دورة حياة المنشور: draft -> approved -> publishing -> published | failed.
+    scheduled وarchived قديمتان وتبقيان كما هما (الناشر لا يلمسهما)."""
     DRAFT = "draft"
     SCHEDULED = "scheduled"
+    APPROVED = "approved"
+    PUBLISHING = "publishing"
     PUBLISHED = "published"
+    FAILED = "failed"
     ARCHIVED = "archived"
+
+
+class DeliveryStatus(str, enum.Enum):
+    """حالة النشر على منصة واحدة. تُخزَّن نصاً عادياً في post_deliveries.status."""
+    PENDING = "pending"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    FAILED = "failed"
+
+
+class ReportKind(str, enum.Enum):
+    """تصنيف أخطاء النشر. يُخزَّن نصاً عادياً في publish_reports.kind."""
+    TOKEN = "token"
+    MEDIA = "media"
+    LIMIT = "limit"
+    NETWORK = "network"
+    UNKNOWN = "unknown"
 
 
 class PostApproval(str, enum.Enum):
@@ -112,12 +134,13 @@ class Product(Base):
 
 
 class Post(Base):
-    """منشور مخصص للنشر على مواقع التواصل الاجتماعي."""
+    """منشور مخصص للنشر على مواقع التواصل الاجتماعي.
+    description هو نص المنشور (caption) الذي يُنشر كما هو."""
     __tablename__ = "posts"
 
     id = Column(Integer, primary_key=True, index=True)
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
-    media_type = Column(Enum("image", "gallery", "reel", name="postmediatype"), nullable=False)
+    media_type = Column(Enum("text", "image", "gallery", "reel", name="postmediatype"), nullable=False)
     media_urls = Column(JSON, nullable=False, default=list)
     description = Column(Text, nullable=True)
     status = Column(Enum(PostStatus), nullable=False, default=PostStatus.DRAFT)
@@ -125,7 +148,47 @@ class Post(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     published_at = Column(DateTime, nullable=True)
 
+    # --- النشر التلقائي (المرحلة الأولى) ---
+    platforms = Column(String(100), nullable=True)        # مثل "facebook,instagram"
+    scheduled_at = Column(DateTime, nullable=True)        # لا يُنشر قبله (UTC)
+    approved_at = Column(DateTime, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)          # وقت الحجز، لكشف العالقين
+    error = Column(Text, nullable=True)                   # آخر خطأ مختصر
+    sku = Column(String(50), nullable=True, index=True)   # إن وُجد يبقى كما هو، الناشر لا يلمسه
+
     factory = relationship("Factory", back_populates="posts")
+    deliveries = relationship("PostDelivery", back_populates="post", cascade="all, delete-orphan")
+
+
+class PostDelivery(Base):
+    """نتيجة النشر على منصة واحدة. القيد الفريد يمنع النشر المزدوج، وعند إعادة المحاولة
+    تُنشر المنصة الفاشلة وحدها. المنصة نص عادي (لا Enum) كي لا تحتاج منصة جديدة إلى ترحيل."""
+    __tablename__ = "post_deliveries"
+    __table_args__ = (UniqueConstraint("post_id", "platform", name="uq_post_deliveries_post_platform"),)
+
+    id = Column(Integer, primary_key=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    platform = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default=DeliveryStatus.PENDING.value)
+    remote_id = Column(String(100), nullable=True)
+    error = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    published_at = Column(DateTime, nullable=True)
+
+    post = relationship("Post", back_populates="deliveries")
+
+
+class PublishReport(Base):
+    """تقرير خطأ نشر. sent_at يُملأ لاحقاً عند إرساله إلى قناة (NULL الآن)."""
+    __tablename__ = "publish_reports"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=True, index=True)
+    platform = Column(String(30), nullable=True)
+    kind = Column(String(20), nullable=False, default=ReportKind.UNKNOWN.value)
+    message = Column(Text, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
 
 
 class Order(Base):

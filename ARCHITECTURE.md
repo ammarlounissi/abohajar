@@ -45,3 +45,10 @@ models.py, schemas.py, core/
 
 `alembic upgrade head` (خذ نسخة من ملف القاعدة أولاً): ينشئ `factory_contacts` وينسخ إليه أرقام
 `factories.phone_number` كجهات واتساب، ويضيف `pending_media_updates.channel` ويعيد تسمية `media_id` إلى `media_ref`.
+
+## النشر الاجتماعي (services/social)
+
+- `services/social/base.py`: العقد `Publisher` (`validate` بلا شبكة ثم `_publish`) و`PublishResult` وتصنيف أخطاء Graph.
+- `services/social/facebook.py` و`instagram.py`: محوّل لكل منصة. منصة جديدة (تيليجرام لاحقاً) = ملف محوّل + سطر في `services/social/__init__.py:REGISTRY`.
+- `services/post_publisher.py`: الحجز الذري، `post_deliveries` لكل منصة، التقارير، العالقون. يُرجع بيانات لا نصوصاً عربية.
+- `app/jobs/`: نقاط دخول الطرفية/systemd فقط (`publish_due`, `posts`). `services/` لا تستورد منها (يحرسه `tests/test_architecture.py`).
