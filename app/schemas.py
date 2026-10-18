@@ -3,7 +3,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models import Availability, Channel, PostApproval, PostStatus, SyncStatus
+from app.models import Availability, Channel, ChannelPlatform, PostApproval, PostStatus, SyncStatus
 
 SKU_PATTERN = r"^[A-Z0-9][A-Z0-9_-]{1,49}$"   # مثال: STONE-GLM-01
 
@@ -45,6 +45,50 @@ class FactoryContactResponse(BaseModel):
     factory_id: int
     channel: str
     identifier: str
+
+
+# --- قنوات النشر ---
+class SocialChannelCreate(BaseModel):
+    platform: ChannelPlatform
+    name: str = Field(min_length=1, max_length=100)
+    remote_id: str = Field(min_length=1, max_length=100)    # صيغته تُفحص حسب المنصة في الخدمة
+    is_active: bool = True
+
+    @field_validator("name", "remote_id", mode="before")
+    @classmethod
+    def strip_text(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+
+class SocialChannelUpdate(BaseModel):
+    """المنصة لا تتغير بعد الإنشاء (احذف القناة وأنشئ غيرها)."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    remote_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    is_active: Optional[bool] = None
+
+    @field_validator("name", "remote_id", mode="before")
+    @classmethod
+    def strip_text(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _no_null_required(self):
+        # PATCH يقبل غياب الحقل لا null صريحاً في أعمدة NOT NULL
+        for field in ("name", "remote_id", "is_active"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} لا يقبل null")
+        return self
+
+
+class SocialChannelResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    platform: str
+    name: str
+    remote_id: str
+    is_active: bool
+    created_at: datetime
 
 
 # --- المنتجات ---
@@ -155,7 +199,10 @@ class ProductPublicResponse(BaseModel):
     additional_media_urls: List[str] = Field(default_factory=list)
 
 
-PLATFORMS_PATTERN = r"^[a-z][a-z_]*(,[a-z][a-z_]*)*$"   # مثل facebook,instagram
+# مثل facebook,instagram أو facebook:123456789,telegram:@my_channel
+# الاسم وحده = كل القنوات المفعّلة لتلك المنصة، واسم:معرّف = قناة بعينها
+_PLATFORM_TOKEN = r"[a-z][a-z_]*(?::[A-Za-z0-9@_-]{1,100})?"
+PLATFORMS_PATTERN = rf"^{_PLATFORM_TOKEN}(,{_PLATFORM_TOKEN})*$"
 MediaType = Literal["text", "image", "gallery", "reel"]
 
 
@@ -175,7 +222,7 @@ class PostBase(BaseModel):
     status: PostStatus = PostStatus.DRAFT
     approval: PostApproval = PostApproval.PENDING
     published_at: Optional[datetime] = None
-    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=100)
+    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=255)
     scheduled_at: Optional[datetime] = None
     sku: Optional[str] = Field(default=None, max_length=50)
 
@@ -195,7 +242,7 @@ class PostUpdate(BaseModel):
     status: Optional[PostStatus] = None
     approval: Optional[PostApproval] = None
     published_at: Optional[datetime] = None
-    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=100)
+    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=255)
     scheduled_at: Optional[datetime] = None
     sku: Optional[str] = Field(default=None, max_length=50)
 
@@ -203,6 +250,7 @@ class PostUpdate(BaseModel):
 class PostDeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     platform: str
+    channel_remote_id: str = ""      # فارغ = معرّف الإعدادات القديم
     status: str
     remote_id: Optional[str] = None
     error: Optional[str] = None

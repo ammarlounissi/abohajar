@@ -18,6 +18,14 @@ class Channel(str, enum.Enum):
     EMAIL = "email"
 
 
+class ChannelPlatform(str, enum.Enum):
+    """منصة قناة النشر. القيم تطابق أسماء محوّلات النشر (services/social). تُخزَّن نصاً عادياً
+    في social_channels.platform كي لا تحتاج منصة جديدة إلى ترحيل مخطط."""
+    FACEBOOK = "facebook"      # صفحة فيسبوك
+    INSTAGRAM = "instagram"    # حساب إنستغرام احترافي
+    TELEGRAM = "telegram"      # قناة تيليجرام
+
+
 class SyncStatus(str, enum.Enum):
     PENDING = "pending"
     SYNCED = "synced"
@@ -102,6 +110,22 @@ class FactoryContact(Base):
     factory = relationship("Factory", back_populates="contacts")
 
 
+class SocialChannel(Base):
+    """قناة نشر (صفحة فيسبوك / حساب إنستغرام احترافي / قناة تيليجرام). تغني عن حفظ المعرّفات في الإعدادات:
+    رمز ميتا نفسه يخدم أي صفحة تُضاف إلى الحافظة، فيكفي تسجيل معرّفها هنا.
+    remote_id هو المعرّف الأصلي عند المنصة، وis_active=False يوقف النشر إليها دون حذفها.
+    (اسم الصنف ليس Channel لأن Channel قائم أصلاً لقنوات محادثة المصانع.)"""
+    __tablename__ = "social_channels"
+    __table_args__ = (UniqueConstraint("platform", "remote_id", name="uq_social_channels_platform_remote_id"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(String(30), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    remote_id = Column(String(100), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class Product(Base):
     """المنتجات، متوافقة مع Meta Commerce Graph API"""
     __tablename__ = "products"
@@ -149,7 +173,8 @@ class Post(Base):
     published_at = Column(DateTime, nullable=True)
 
     # --- النشر التلقائي (المرحلة الأولى) ---
-    platforms = Column(String(100), nullable=True)        # مثل "facebook,instagram"
+    # مثل "facebook,instagram" (كل القنوات المفعّلة للمنصة) أو "facebook:123456" (قناة بعينها)
+    platforms = Column(String(255), nullable=True)
     scheduled_at = Column(DateTime, nullable=True)        # لا يُنشر قبله (UTC)
     approved_at = Column(DateTime, nullable=True)
     claimed_at = Column(DateTime, nullable=True)          # وقت الحجز، لكشف العالقين
@@ -161,14 +186,18 @@ class Post(Base):
 
 
 class PostDelivery(Base):
-    """نتيجة النشر على منصة واحدة. القيد الفريد يمنع النشر المزدوج، وعند إعادة المحاولة
-    تُنشر المنصة الفاشلة وحدها. المنصة نص عادي (لا Enum) كي لا تحتاج منصة جديدة إلى ترحيل."""
+    """نتيجة النشر على قناة واحدة (منصة + معرّفها الأصلي). القيد الفريد يمنع النشر المزدوج، وعند
+    إعادة المحاولة تُنشر القناة الفاشلة وحدها. المنصة نص عادي (لا Enum) كي لا تحتاج منصة جديدة إلى ترحيل.
+    channel_remote_id فارغ ("") = النشر القديم بمعرّف الإعدادات (META_PAGE_ID / META_IG_USER_ID)."""
     __tablename__ = "post_deliveries"
-    __table_args__ = (UniqueConstraint("post_id", "platform", name="uq_post_deliveries_post_platform"),)
+    __table_args__ = (
+        UniqueConstraint("post_id", "platform", "channel_remote_id", name="uq_post_deliveries_post_platform_channel"),
+    )
 
     id = Column(Integer, primary_key=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     platform = Column(String(30), nullable=False)
+    channel_remote_id = Column(String(100), nullable=False, default="", server_default="")
     status = Column(String(20), nullable=False, default=DeliveryStatus.PENDING.value)
     remote_id = Column(String(100), nullable=True)
     error = Column(Text, nullable=True)

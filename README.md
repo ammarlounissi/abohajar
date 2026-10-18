@@ -23,6 +23,7 @@ abohajar/
 │   │   ├── products.py        /api/products (القراءة العامة + الإدارة + مزامنة ميتا + رفع CSV)
 │   │   ├── factories.py       /api/factories وجهات اتصالها /contacts
 │   │   ├── posts.py           /api/posts
+│   │   ├── social_channels.py /api/social-channels (قنوات النشر: فيسبوك/إنستغرام/تيليجرام)
 │   ├── jobs/                  نقاط دخول الطرفية: publish_due وposts (النشر التلقائي)
 │   │   └── webhook.py         /webhook (واتساب)
 │   ├── channels/            التحدث مع المصانع عبر قنوات المحادثة
@@ -34,6 +35,7 @@ abohajar/
 │       ├── errors.py          NotFound / Duplicate / Conflict / InvalidInput
 │       ├── products.py        CRUD المنتجات، parse_caption، upsert، import_csv
 │       ├── factories.py       المصانع وجهات الاتصال، find_by_contact
+│       ├── social_channels.py قنوات النشر ومعرّفاتها الأصلية (CRUD، list_active)
 │       ├── product_intake.py  استقبال منتج من مصنع (تحقق، سؤال التحديث، حفظ، مزامنة)
 │       ├── import_job.py      الاستيراد التلقائي كمهمة إدارية (مع قفل)
 │       ├── media.py           حفظ الصور على القرص وبناء الروابط العامة
@@ -211,6 +213,35 @@ python -m app.jobs.posts show 12             # حالة كل منصة وآخر �
 | `GET /api/posts/unpublished` | غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة) |
 | `GET /api/posts/{id}` | منشور واحد مع `deliveries` (حالة كل منصة) |
 | `POST /api/posts/{id}/publish` | نشر يدوي فوري: يرجع 202 بحالة publishing والنشر في الخلفية؛ تابعه بـ GET السابق. يتجاوز الموعد والسقف اليومي، ويرفض المنشور أو قيد النشر بـ 409 |
+
+**قنوات النشر (`/api/social-channels`، بـ `X-API-Key`):** صفحة فيسبوك أو حساب إنستغرام احترافي أو قناة تيليجرام تُسجَّل في الجدول `social_channels` بدل `META_PAGE_ID` و`META_IG_USER_ID` في `.env`، فرمز ميتا نفسه يخدم أي صفحة تُضاف إلى الحافظة.
+
+| المسار | الوظيفة |
+| --- | --- |
+| `POST /api/social-channels/` | إنشاء: `platform` (`facebook` / `instagram` / `telegram`) و`name` و`remote_id` (المعرّف الأصلي عند المنصة) و`is_active` (الافتراضي true) |
+| `GET /api/social-channels/` | القائمة، مع تصفية اختيارية `?platform=` و`?is_active=` |
+| `GET /api/social-channels/{id}` | قناة واحدة |
+| `PATCH /api/social-channels/{id}` | تعديل `name` أو `remote_id` أو `is_active` (التفعيل/التعطيل). المنصة لا تتغير |
+| `DELETE /api/social-channels/{id}` | حذف |
+
+صيغة `remote_id`: فيسبوك وإنستغرام رقم فقط؛ تيليجرام رقم مثل `-1001234567890` أو `@اسم_القناة`. التكرار (نفس المنصة والمعرّف) يرجع 400.
+
+```bash
+curl -X POST $API/api/social-channels/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"platform":"facebook","name":"صفحة حجرة بلادي","remote_id":"123456789012345"}'
+curl -X PATCH $API/api/social-channels/1 -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{"is_active":false}'
+```
+
+**اختيار القنوات في المنشور (`platforms`):**
+
+| القيمة | المعنى |
+| --- | --- |
+| `facebook,instagram` | كل القنوات **المفعّلة** المسجلة لكل منصة في `social_channels` |
+| `facebook:123456789` | هذه القناة فقط (يجب أن تكون مسجلة ومفعّلة وإلا يفشل التسليم بـ `channel_not_found_or_inactive`) |
+| `facebook,instagram:555` | خلط حر بين الاثنين |
+
+- لكل قناة صف في `post_deliveries` (`platform` + `channel_remote_id`)، وإعادة المحاولة تنشر القنوات الفاشلة وحدها.
+- منصة لا قناة لها في الجدول إطلاقاً ترجع إلى `META_PAGE_ID` / `META_IG_USER_ID` في `.env` (`channel_remote_id` فارغ). أما إن سُجّلت قنوات وعُطّلت كلها فيفشل بـ `no_active_channel` ولا يُنشر على معرّف `.env` بصمت.
 
 **منشورات تجريبية:**
 

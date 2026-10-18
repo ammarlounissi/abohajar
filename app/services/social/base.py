@@ -3,6 +3,7 @@
 لا نصوص عربية هنا: الأخطاء رموز تقنية قصيرة (مثل instagram_image_must_be_jpeg) أو نص Meta كما جاء،
 وتُحفظ في post_deliveries.error وpublish_reports.message.
 """
+import copy
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -36,6 +37,7 @@ class PublishResult:
     remote_id: Optional[str] = None
     error: Optional[str] = None
     kind: Optional[ReportKind] = None      # يُملأ عند الفشل فقط
+    channel_remote_id: str = ""            # القناة التي نُشر إليها ("" = معرّف الإعدادات القديم)
 
 
 def classify_graph_error(http_status: int, error: Optional[dict]) -> ReportKind:
@@ -73,6 +75,13 @@ class Publisher:
     """
 
     platform: str = ""
+    channel_id: Optional[str] = None     # معرّف القناة الأصلي؛ None = معرّف الإعدادات القديم
+
+    def for_channel(self, channel_id: str) -> "Publisher":
+        """نسخة من المحوّل موجّهة إلى قناة بعينها (لا تغيّر الأصل، فيصلح لعدة قنوات في المنصة نفسها)."""
+        clone = copy.copy(self)
+        clone.channel_id = channel_id
+        return clone
 
     def validate(self, post) -> Optional[PublishError]:
         raise NotImplementedError

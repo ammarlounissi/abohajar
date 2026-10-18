@@ -19,10 +19,14 @@ class InstagramPublisher(Publisher):
         self._transport = transport
         self._sleep = sleep
 
+    @property
+    def _ig_id(self) -> str:
+        return self.channel_id or settings.META_IG_USER_ID
+
     def validate(self, post) -> Optional[PublishError]:
         if not settings.META_ACCESS_TOKEN:
             return PublishError(ReportKind.TOKEN, "config_missing:META_ACCESS_TOKEN")
-        if not settings.META_IG_USER_ID:
+        if not self._ig_id:
             return PublishError(ReportKind.UNKNOWN, "config_missing:META_IG_USER_ID")
         media_type, urls = post.media_type, list(post.media_urls or [])
         if media_type == "gallery":
@@ -59,7 +63,7 @@ class InstagramPublisher(Publisher):
             waited += self.POLL_INTERVAL
 
     async def _publish(self, post) -> str:
-        token, ig = settings.META_ACCESS_TOKEN, settings.META_IG_USER_ID
+        token, ig = settings.META_ACCESS_TOKEN, self._ig_id
         is_reel = post.media_type == "reel"
         fields = {"caption": post.description or ""}
         if is_reel:

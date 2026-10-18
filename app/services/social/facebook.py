@@ -15,10 +15,19 @@ class FacebookPublisher(Publisher):
         self._transport = transport        # للاختبار (httpx.MockTransport)
         self._page_token: Optional[str] = None
 
+    @property
+    def _page_id(self) -> str:
+        return self.channel_id or settings.META_PAGE_ID
+
+    def for_channel(self, channel_id: str) -> "FacebookPublisher":
+        clone = super().for_channel(channel_id)
+        clone._page_token = None      # رمز كل صفحة مختلف، فلا يُورَّث من نسخة أخرى
+        return clone
+
     def validate(self, post) -> Optional[PublishError]:
         if not settings.META_ACCESS_TOKEN:
             return PublishError(ReportKind.TOKEN, "config_missing:META_ACCESS_TOKEN")
-        if not settings.META_PAGE_ID:
+        if not self._page_id:
             return PublishError(ReportKind.UNKNOWN, "config_missing:META_PAGE_ID")
         media_type, urls = post.media_type, list(post.media_urls or [])
         if media_type == "gallery":
@@ -36,7 +45,7 @@ class FacebookPublisher(Publisher):
     async def _get_page_token(self, client) -> str:
         if not self._page_token:
             data = await graph_call(
-                client, "GET", settings.META_PAGE_ID,
+                client, "GET", self._page_id,
                 token=settings.META_ACCESS_TOKEN, params={"fields": "access_token"},
             )
             if not data.get("access_token"):
@@ -49,7 +58,7 @@ class FacebookPublisher(Publisher):
         timeout = self.VIDEO_TIMEOUT if post.media_type == "reel" else 60.0
         async with make_client(timeout, self._transport) as client:
             token = await self._get_page_token(client)
-            page = settings.META_PAGE_ID
+            page = self._page_id
             if post.media_type == "text":
                 body = await graph_call(client, "POST", f"{page}/feed", token=token, data={"message": caption})
             elif post.media_type == "image":

@@ -31,12 +31,13 @@ def format_summary(summary: post_publisher.RunSummary) -> str:
         for platform in outcome.skipped:
             lines.append(f"  {platform}: سبق نشره، تخطّي")
         for result in outcome.results:
+            name = f"{result.platform}:{result.channel_remote_id}" if result.channel_remote_id else result.platform
             if result.ok:
-                lines.append(f"  {result.platform}: OK remote_id={result.remote_id}" if not summary.dry_run
-                             else f"  {result.platform}: سيُنشر (اجتاز التحقق المسبق)")
+                lines.append(f"  {name}: OK remote_id={result.remote_id}" if not summary.dry_run
+                             else f"  {name}: سيُنشر (اجتاز التحقق المسبق)")
             else:
                 kind = result.kind.value if result.kind else "unknown"
-                lines.append(f"  {result.platform}: FAILED kind={kind} {result.error}")
+                lines.append(f"  {name}: FAILED kind={kind} {result.error}")
     return "\n".join(lines)
 
 

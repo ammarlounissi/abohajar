@@ -55,7 +55,7 @@ def main(argv=None) -> int:
         if post.error:
             print(f"  error: {post.error}")
         for d in post.deliveries:
-            print(f"  {d.platform}: {d.status} attempts={d.attempts} remote_id={d.remote_id or '-'} {d.error or ''}")
+            print(f"  {d.platform}{':' + d.channel_remote_id if d.channel_remote_id else ''}: {d.status} attempts={d.attempts} remote_id={d.remote_id or '-'} {d.error or ''}")
         return 0
     finally:
         db.close()
