@@ -132,6 +132,33 @@ class SetChannelsTests(Base_):
         channel_service.delete_channel(self.db, b)       # بلا منشورات: يُحذف
 
 
+class CaptionTests(Base_):
+    class CaptionPublisher(Publisher):
+        def __init__(self, platform, seen):
+            self.platform, self.seen = platform, seen
+
+        def validate(self, post):
+            return None
+
+        async def _publish(self, post):
+            self.seen[self.channel_id] = post.description      # المعرّف الأصلي للقناة
+            return "ok"
+
+    def test_each_channel_publishes_its_own_caption_else_the_post_text(self):
+        fb, ig, tg = self.channel("facebook", "111111"), self.channel("instagram", "222222"), self.channel("facebook", "333333")
+        post = self.post(fb, ig, tg)
+        by_channel = {d.channel_id: d for d in post.deliveries}
+        by_channel[fb].caption = "نص فيسبوك"
+        by_channel[ig].caption = "نص إنستغرام"
+        self.db.commit()
+        seen = {}
+        asyncio.run(post_publisher.publish_due(
+            self.db, publishers={"facebook": self.CaptionPublisher("facebook", seen),
+                                 "instagram": self.CaptionPublisher("instagram", seen)}, now=NOW))
+        self.assertEqual(seen, {"111111": "نص فيسبوك", "222222": "نص إنستغرام", "333333": "نص"})   # الأخيرة بلا نص خاص
+        self.assertEqual(by_channel[fb].caption, "نص فيسبوك")      # النص المنشور محفوظ كما نُشر
+
+
 class PublishTests(Base_):
     def test_publishes_to_every_selected_channel(self):
         f1, f2, i1 = self.channel("facebook", "111111"), self.channel("facebook", "222222"), self.channel("instagram", "999999")

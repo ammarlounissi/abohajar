@@ -52,6 +52,20 @@ class RunSummary:
         return sum(1 for o in self.outcomes for r in o.results if not r.ok)
 
 
+@dataclass(frozen=True)
+class PostView:
+    """ما يراه المحوّل من المنشور لقناة واحدة: نص القناة (إن وُجد) بدل نص المنشور العام."""
+    id: int
+    media_type: str
+    media_urls: List[str]
+    description: Optional[str]
+
+
+def view_for(post: models.Post, delivery: models.PostDelivery) -> PostView:
+    caption = delivery.caption if delivery.caption is not None else post.description
+    return PostView(post.id, post.media_type, list(post.media_urls or []), caption)
+
+
 def _label(delivery: models.PostDelivery) -> str:
     return delivery.channel.label
 
@@ -267,7 +281,7 @@ def _channel_problem(publishers: Dict[str, Publisher], channel: models.SocialCha
     return None
 
 
-async def _publish_to_channel(publishers: Dict[str, Publisher], channel: models.SocialChannel, post: models.Post) -> PublishResult:
+async def _publish_to_channel(publishers: Dict[str, Publisher], channel: models.SocialChannel, post: PostView) -> PublishResult:
     platform = channel.platform
     problem = _channel_problem(publishers, channel)
     if problem:
@@ -321,7 +335,7 @@ async def publish_post(db: Session, post: models.Post, publishers: Dict[str, Pub
         delivery.status = DeliveryStatus.PUBLISHING.value
         delivery.attempts = (delivery.attempts or 0) + 1
         db.commit()
-        result = await _publish_to_channel(publishers, delivery.channel, post)
+        result = await _publish_to_channel(publishers, delivery.channel, view_for(post, delivery))
         _record_result(db, post, delivery, result, datetime.utcnow())
         outcome.results.append(result)
 
@@ -370,7 +384,7 @@ async def publish_due(
                 channel = delivery.channel
                 problem = _channel_problem(publishers, channel)
                 if problem is None:
-                    problem = publishers[channel.platform].for_channel(channel.remote_id).validate(post)
+                    problem = publishers[channel.platform].for_channel(channel.remote_id).validate(view_for(post, delivery))
                 results.append(PublishResult(
                     channel.platform, problem is None, error=problem.message if problem else None,
                     kind=problem.kind if problem else None, channel_id=channel.id, channel_label=channel.label,

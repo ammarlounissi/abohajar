@@ -205,6 +205,8 @@ class PostDelivery(Base):
     id = Column(Integer, primary_key=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     channel_id = Column(Integer, ForeignKey("social_channels.id", ondelete="RESTRICT"), nullable=False, index=True)
+    # نص هذه القناة كما سيُنشر/نُشر (قالب كل منصة)؛ NULL = يُنشر posts.description
+    caption = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, default=DeliveryStatus.PENDING.value)
     remote_id = Column(String(100), nullable=True)
     error = Column(Text, nullable=True)

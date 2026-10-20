@@ -257,6 +257,7 @@ class PostDeliveryResponse(BaseModel):
     platform: str                    # من القناة
     channel_name: str
     channel_remote_id: str
+    caption: Optional[str] = None
     status: str
     remote_id: Optional[str] = None
     error: Optional[str] = None

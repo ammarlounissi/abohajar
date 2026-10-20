@@ -242,6 +242,7 @@ curl -X PATCH $API/api/social-channels/1 -H "X-API-Key: $KEY" -H "Content-Type: 
 - تُحدَّد القنوات عند الإنشاء بـ `channel_ids` (أو `scripts.compose_post --channel`) وتُحفظ صراحةً، فلا تتغير وجهة منشور بتفعيل قناة جديدة بعده.
 - الوجهة تبدأ `pending` ثم `published` أو `failed`، وإعادة المحاولة تنشر القنوات غير الناجحة وحدها.
 - قناة عُطّلت بعد تحديدها يفشل تسليمها بـ `channel_inactive:<منصة>:<معرّف>` ولا يتوقف باقي القنوات.
+- لكل قناة نصها الخاص في `post_deliveries.caption` (قالب منصتها)، وبدونه يُنشر `posts.description`. القوالب في `app/services/post_templates.py` (فيسبوك بروابط، إنستغرام بلا روابط)، ورقم واتساب من `POST_CONTACT_PHONE`.
 - لا رجوع إلى `META_PAGE_ID` / `META_IG_USER_ID` وقت النشر: منشور بلا قنوات يفشل بـ `no_channels`.
 
 **منشورات تجريبية:**

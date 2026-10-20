@@ -63,6 +63,9 @@ class Settings:
     if o.strip()
 ]
 
+    # رقم واتساب الذي تدعو إليه منشورات المنتجات (صيغة محلية 0549194378 أو دولية)
+    POST_CONTACT_PHONE = _get("POST_CONTACT_PHONE", "0549194378")
+
     # الروابط العامة
     BASE_URL = _get("BASE_URL").rstrip("/")             # عنوان هذا الـ API العام
     PRODUCT_LINK_TEMPLATE = _get(
