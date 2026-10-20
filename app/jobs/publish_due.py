@@ -27,11 +27,11 @@ def format_summary(summary: post_publisher.RunSummary) -> str:
     if not summary.outcomes and not summary.daily_limit_reached:
         lines.append("لا منشور جاهز الآن")
     for outcome in summary.outcomes:
-        lines.append(f"post={outcome.post_id} status={outcome.status} platforms={','.join(outcome.platforms) or '-'}")
-        for platform in outcome.skipped:
-            lines.append(f"  {platform}: سبق نشره، تخطّي")
+        lines.append(f"post={outcome.post_id} status={outcome.status} channels={','.join(outcome.channels) or '-'}")
+        for label in outcome.skipped:
+            lines.append(f"  {label}: سبق نشره، تخطّي")
         for result in outcome.results:
-            name = f"{result.platform}:{result.channel_remote_id}" if result.channel_remote_id else result.platform
+            name = result.channel_label or result.platform
             if result.ok:
                 lines.append(f"  {name}: OK remote_id={result.remote_id}" if not summary.dry_run
                              else f"  {name}: سيُنشر (اجتاز التحقق المسبق)")
@@ -42,7 +42,7 @@ def format_summary(summary: post_publisher.RunSummary) -> str:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="نشر المنشور الجاهز على فيسبوك وإنستغرام")
+    parser = argparse.ArgumentParser(description="نشر المنشور الجاهز على قنواته")
     parser.add_argument("--dry-run", action="store_true", help="اعرض ما سيُنشر دون حجز أو نشر")
     args = parser.parse_args(argv)
 

@@ -194,10 +194,13 @@ python3 test_api.py http://127.0.0.1:8000 --write --yes --include-sync
 cp hojrat_bladi.db "hojrat_bladi.db.$(date +%Y%m%d-%H%M%S).bak"
 alembic upgrade head
 
-# 2) ضبط META_PAGE_ID وMETA_IG_USER_ID في .env ثم إعادة تشغيل FastAPI (انظر .env.example)
+# 2) سجّل قنوات النشر في /api/social-channels (انظر أدناه). إن كان META_PAGE_ID أو META_IG_USER_ID مضبوطاً
+#    في .env فيسجّلهما الترحيل تلقائياً كقناتين. ثم أعد تشغيل FastAPI
 
 # 3) دورة العمل
 python -m app.jobs.posts list --status draft
+python -m scripts.compose_post B001 --apply  # مسودة من منتج (SKU) لكل القنوات المفعّلة، أو --channel 1 --channel 3
+python -m app.jobs.posts publish 12          # نشر فوري لمنشور بعينه (يتجاوز الموعد والموافقة)
 python -m app.jobs.posts approve 12          # draft/scheduled/failed -> approved
 python -m app.jobs.publish_due --dry-run     # يعرض ما سيُنشر ونتيجة التحقق المسبق، بلا حجز
 python -m app.jobs.publish_due               # نشر فعلي
@@ -211,7 +214,9 @@ python -m app.jobs.posts show 12             # حالة كل منصة وآخر �
 | `GET /api/posts/` | كل المنشورات |
 | `GET /api/posts/published` | المنشورة فقط (الأحدث نشرًا أولًا)، مع `limit` و`offset` |
 | `GET /api/posts/unpublished` | غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة) |
-| `GET /api/posts/{id}` | منشور واحد مع `deliveries` (حالة كل منصة) |
+| `POST /api/posts/` | إنشاء، ويقبل `channel_ids: [1, 3]` (معرّفات `social_channels.id`) لتحديد القنوات |
+| `PATCH /api/posts/{id}` | تعديل، ومع `channel_ids` تُستبدل القنوات (الناجحة منها تبقى كسجل) |
+| `GET /api/posts/{id}` | منشور واحد مع `deliveries` (قناة وحالة كل وجهة: `channel_id` و`platform` و`channel_name`) |
 | `POST /api/posts/{id}/publish` | نشر يدوي فوري: يرجع 202 بحالة publishing والنشر في الخلفية؛ تابعه بـ GET السابق. يتجاوز الموعد والسقف اليومي، ويرفض المنشور أو قيد النشر بـ 409 |
 
 **قنوات النشر (`/api/social-channels`، بـ `X-API-Key`):** صفحة فيسبوك أو حساب إنستغرام احترافي أو قناة تيليجرام تُسجَّل في الجدول `social_channels` بدل `META_PAGE_ID` و`META_IG_USER_ID` في `.env`، فرمز ميتا نفسه يخدم أي صفحة تُضاف إلى الحافظة.
@@ -222,7 +227,7 @@ python -m app.jobs.posts show 12             # حالة كل منصة وآخر �
 | `GET /api/social-channels/` | القائمة، مع تصفية اختيارية `?platform=` و`?is_active=` |
 | `GET /api/social-channels/{id}` | قناة واحدة |
 | `PATCH /api/social-channels/{id}` | تعديل `name` أو `remote_id` أو `is_active` (التفعيل/التعطيل). المنصة لا تتغير |
-| `DELETE /api/social-channels/{id}` | حذف |
+| `DELETE /api/social-channels/{id}` | حذف. يُرفض بـ 409 إن كانت للقناة منشورات، فعطّلها بدل حذفها |
 
 صيغة `remote_id`: فيسبوك وإنستغرام رقم فقط؛ تيليجرام رقم مثل `-1001234567890` أو `@اسم_القناة`. التكرار (نفس المنصة والمعرّف) يرجع 400.
 
@@ -232,16 +237,12 @@ curl -X POST $API/api/social-channels/ -H "X-API-Key: $KEY" -H "Content-Type: ap
 curl -X PATCH $API/api/social-channels/1 -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{"is_active":false}'
 ```
 
-**اختيار القنوات في المنشور (`platforms`):**
+**قنوات المنشور (وجهات النشر):** المنشور الواحد يستهدف أي عدد من القنوات، وتُخزَّن وجهاته في `post_deliveries` بمعرّف القناة الداخلي `channel_id` (FK إلى `social_channels.id`) فقط. المنصة والمعرّف الأصلي واسم القناة وحالة التفعيل تُقرأ من جدول القنوات ولا تتكرر في المنشور.
 
-| القيمة | المعنى |
-| --- | --- |
-| `facebook,instagram` | كل القنوات **المفعّلة** المسجلة لكل منصة في `social_channels` |
-| `facebook:123456789` | هذه القناة فقط (يجب أن تكون مسجلة ومفعّلة وإلا يفشل التسليم بـ `channel_not_found_or_inactive`) |
-| `facebook,instagram:555` | خلط حر بين الاثنين |
-
-- لكل قناة صف في `post_deliveries` (`platform` + `channel_remote_id`)، وإعادة المحاولة تنشر القنوات الفاشلة وحدها.
-- منصة لا قناة لها في الجدول إطلاقاً ترجع إلى `META_PAGE_ID` / `META_IG_USER_ID` في `.env` (`channel_remote_id` فارغ). أما إن سُجّلت قنوات وعُطّلت كلها فيفشل بـ `no_active_channel` ولا يُنشر على معرّف `.env` بصمت.
+- تُحدَّد القنوات عند الإنشاء بـ `channel_ids` (أو `scripts.compose_post --channel`) وتُحفظ صراحةً، فلا تتغير وجهة منشور بتفعيل قناة جديدة بعده.
+- الوجهة تبدأ `pending` ثم `published` أو `failed`، وإعادة المحاولة تنشر القنوات غير الناجحة وحدها.
+- قناة عُطّلت بعد تحديدها يفشل تسليمها بـ `channel_inactive:<منصة>:<معرّف>` ولا يتوقف باقي القنوات.
+- لا رجوع إلى `META_PAGE_ID` / `META_IG_USER_ID` وقت النشر: منشور بلا قنوات يفشل بـ `no_channels`.
 
 **منشورات تجريبية:**
 
@@ -254,8 +255,8 @@ python -m scripts.seed_posts --clear --apply                  # حذف منشو�
 تنبيه: `--approve` ثم تشغيل الناشر ينشر فعلًا على الصفحة الحقيقية.
 
 
-- **الحالات:** `draft` ← `approved` ← `publishing` ← `published` أو `failed`. النص هو `posts.description`، والمنصات `posts.platforms` مثل `facebook,instagram`، وأنواع الوسائط `text|image|reel` (`gallery` غير مدعوم في هذه المرحلة).
-- **إعادة محاولة الفاشل:** `python -m app.jobs.posts approve <id>` فتُنشر المنصة الفاشلة وحدها (الناجحة محفوظة في `post_deliveries`).
+- **الحالات:** `draft` ← `approved` ← `publishing` ← `published` أو `failed`. النص هو `posts.description`، وقنواته في `post_deliveries`، وأنواع الوسائط `text|image|reel` (`gallery` غير مدعوم في هذه المرحلة).
+- **إعادة محاولة الفاشل:** `python -m app.jobs.posts approve <id>` فتُنشر القناة الفاشلة وحدها (الناجحة محفوظة في `post_deliveries`).
 - **العالقون:** منشور بقي `publishing` أكثر من `PUBLISH_STALE_MINUTES` لا يُعاد نشره تلقائياً (ربما نُشر)؛ يُكتب له تقرير في `publish_reports` ويظهر في مخرجات التشغيل.
 - **التقارير:** `publish_reports.kind` = `token` (كود 190/463/467) أو `media` أو `limit` أو `network` أو `unknown`، و`sent_at` فارغ حتى تُبنى قناة الإرسال.
 - **الجدولة:** ملفات systemd في `deploy/systemd/` (07:00 UTC = 08:00 الجزائر)؛ انظر التفعيل في أعلى كل ملف ووثيقة المرحلة.

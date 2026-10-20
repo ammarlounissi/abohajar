@@ -28,6 +28,9 @@ class RouterCase(unittest.TestCase):
         self.Session = sessionmaker(bind=engine)
         with self.Session() as db:
             db.add(models.Factory(id=1, name="مصنع", phone_number="213550000000"))
+            db.add(models.SocialChannel(id=1, platform="facebook", name="صفحة", remote_id="111111"))
+            db.add(models.SocialChannel(id=2, platform="instagram", name="حساب", remote_id="222222"))
+            db.add(models.SocialChannel(id=3, platform="facebook", name="صفحة معطّلة", remote_id="333333", is_active=False))
             db.commit()
 
         app = FastAPI()
@@ -49,13 +52,16 @@ class RouterCase(unittest.TestCase):
         app.dependency_overrides[require_admin] = lambda: None
         self.client = TestClient(app)
 
-    def add_post(self, status=PostStatus.DRAFT, platforms="facebook", **kw):
+    def add_post(self, status=PostStatus.DRAFT, channels=(1,), **kw):
+        """channels: معرّفات القنوات الداخلية (فارغة = منشور بلا وجهات)."""
         with self.Session() as db:
             post = models.Post(
-                factory_id=1, media_type="text", media_urls=[], description="نص", status=status,
-                platforms=platforms, **kw,
+                factory_id=1, media_type="text", media_urls=[], description="نص", status=status, **kw,
             )
             db.add(post)
+            db.commit()
+            for channel_id in channels:
+                db.add(models.PostDelivery(post_id=post.id, channel_id=channel_id, status="pending", attempts=0))
             db.commit()
             return post.id
 
@@ -85,14 +91,50 @@ class ListRoutesTests(RouterCase):
         self.assertEqual(self.client.get("/api/posts/unpublished?limit=0").status_code, 422)
 
     def test_detail_includes_deliveries(self):
-        post_id = self.add_post(PostStatus.FAILED, platforms="facebook,instagram")
+        post_id = self.add_post(PostStatus.FAILED, channels=(1, 2))
         with self.Session() as db:
-            db.add(models.PostDelivery(post_id=post_id, platform="facebook", status="published", remote_id="F1", attempts=1))
-            db.add(models.PostDelivery(post_id=post_id, platform="instagram", status="failed", error="(#9004) x", attempts=1))
+            first, second = db.query(models.PostDelivery).order_by(models.PostDelivery.id).all()
+            first.status, first.remote_id, first.attempts = "published", "F1", 1
+            second.status, second.error, second.attempts = "failed", "(#9004) x", 1
             db.commit()
         body = self.client.get(f"/api/posts/{post_id}").json()
-        states = {d["platform"]: (d["status"], d["remote_id"]) for d in body["deliveries"]}
-        self.assertEqual(states, {"facebook": ("published", "F1"), "instagram": ("failed", None)})
+        states = {d["platform"]: (d["channel_id"], d["channel_remote_id"], d["status"], d["remote_id"])
+                  for d in body["deliveries"]}
+        self.assertEqual(states, {"facebook": (1, "111111", "published", "F1"),
+                                  "instagram": (2, "222222", "failed", None)})
+        self.assertNotIn("platforms", body)
+
+
+class ChannelSelectionTests(RouterCase):
+    BODY = {"factory_id": 1, "media_type": "text", "description": "نص"}
+
+    def test_create_with_channel_ids(self):
+        r = self.client.post("/api/posts/", json={**self.BODY, "channel_ids": [2, 1, 2]})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual([(d["channel_id"], d["platform"], d["status"]) for d in r.json()["deliveries"]],
+                         [(2, "instagram", "pending"), (1, "facebook", "pending")])
+
+    def test_create_without_channels_is_allowed(self):
+        r = self.client.post("/api/posts/", json=self.BODY)
+        self.assertEqual((r.status_code, r.json()["deliveries"]), (201, []))
+
+    def test_create_with_bad_channels_creates_nothing(self):
+        self.assertEqual(self.client.post("/api/posts/", json={**self.BODY, "channel_ids": [1, 9999]}).status_code, 404)
+        self.assertEqual(self.client.post("/api/posts/", json={**self.BODY, "channel_ids": [3]}).status_code, 422)  # معطّلة
+        self.assertEqual(self.client.post("/api/posts/", json={**self.BODY, "channel_ids": ["x"]}).status_code, 422)
+        self.assertEqual(self.client.get("/api/posts/").json(), [])
+
+    def test_patch_replaces_channels(self):
+        post_id = self.add_post(PostStatus.DRAFT, channels=(1,))
+        r = self.client.patch(f"/api/posts/{post_id}", json={"channel_ids": [2]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([d["channel_id"] for d in r.json()["deliveries"]], [2])
+        r = self.client.patch(f"/api/posts/{post_id}", json={"description": "جديد"})      # بلا channel_ids: لا تتغير
+        self.assertEqual([d["channel_id"] for d in r.json()["deliveries"]], [2])
+
+    def test_patch_channels_of_published_post_conflicts(self):
+        post_id = self.add_post(PostStatus.PUBLISHED, channels=(1,))
+        self.assertEqual(self.client.patch(f"/api/posts/{post_id}", json={"channel_ids": [2]}).status_code, 409)
 
 
 class PublishNowTests(RouterCase):
@@ -120,9 +162,9 @@ class PublishNowTests(RouterCase):
         self.assertEqual(self.client.post(f"/api/posts/{post_id}/publish").status_code, 409)
         self.bg.assert_not_awaited()
 
-    def test_unknown_post_and_missing_platforms(self):
+    def test_unknown_post_and_missing_channels(self):
         self.assertEqual(self.client.post("/api/posts/9999/publish").status_code, 404)
-        post_id = self.add_post(PostStatus.DRAFT, platforms=None)
+        post_id = self.add_post(PostStatus.DRAFT, channels=())
         self.assertEqual(self.client.post(f"/api/posts/{post_id}/publish").status_code, 422)
         self.bg.assert_not_awaited()
 

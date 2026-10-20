@@ -382,8 +382,8 @@ def main():
                              query={"limit": 501}, expected=(422, 422))
                         step("post-list-negative-offset", "GET", "/api/posts/unpublished",
                              query={"offset": -1}, expected=(422, 422))
-                        step("post-invalid-platforms", "POST", "/api/posts/",
-                             {**post_body, "platforms": "Face Book!"}, expected=(422, 422))
+                        step("post-invalid-channel-ids", "POST", "/api/posts/",
+                             {**post_body, "channel_ids": ["Face Book!"]}, expected=(422, 422))
                         step("post-text-with-media", "POST", "/api/posts/",
                              {**post_body, "media_type": "text"}, expected=(422, 422))
 
@@ -400,7 +400,7 @@ def main():
 
                         # النشر اليدوي: الرفض فقط
                         step("post-publish-missing", "POST", f"/api/posts/{BOGUS_ID}/publish", expected=(404, 404))
-                        step("post-publish-no-platforms", "POST", f"/api/posts/{post_id}/publish", expected=(422, 422))
+                        step("post-publish-no-channels", "POST", f"/api/posts/{post_id}/publish", expected=(422, 422))
                         _, after = step("post-still-draft-after-reject", "GET", f"/api/posts/{post_id}")
                         check("rejected-publish-left-draft", f"/api/posts/{post_id}",
                               isinstance(after, dict) and after.get("status") == "draft",
@@ -408,7 +408,7 @@ def main():
 
                         # منشور بحالة published (يُنشأ مباشرة بلا نشر فعلي): يظهر في المنشورة ويُرفض نشره بـ 409
                         st, done = step("post-create-published", "POST", "/api/posts/",
-                                        {**post_body, "platforms": "facebook", "status": "published"},
+                                        {**post_body, "status": "published"},
                                         expected=(201, 201))
                         done_id = done.get("id") if isinstance(done, dict) else None
                         if done_id:

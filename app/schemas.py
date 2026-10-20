@@ -205,10 +205,6 @@ class ProductPublicResponse(BaseModel):
     additional_media_urls: List[str] = Field(default_factory=list)
 
 
-# مثل facebook,instagram أو facebook:123456789,telegram:@my_channel
-# الاسم وحده = كل القنوات المفعّلة لتلك المنصة، واسم:معرّف = قناة بعينها
-_PLATFORM_TOKEN = r"[a-z][a-z_]*(?::[A-Za-z0-9@_-]{1,100})?"
-PLATFORMS_PATTERN = rf"^{_PLATFORM_TOKEN}(,{_PLATFORM_TOKEN})*$"
 MediaType = Literal["text", "image", "gallery", "reel"]
 
 
@@ -228,12 +224,14 @@ class PostBase(BaseModel):
     status: PostStatus = PostStatus.DRAFT
     approval: PostApproval = PostApproval.PENDING
     published_at: Optional[datetime] = None
-    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=255)
     scheduled_at: Optional[datetime] = None
     sku: Optional[str] = Field(default=None, max_length=50)
 
 
 class PostCreate(PostBase):
+    # معرّفات القنوات من social_channels (فارغة = منشور بلا وجهات، يلزمه تحديد قنوات قبل الاعتماد/النشر)
+    channel_ids: List[int] = Field(default_factory=list)
+
     @model_validator(mode="after")
     def _media_consistent(self):
         _check_media(self.media_type, self.media_urls)
@@ -241,6 +239,7 @@ class PostCreate(PostBase):
 
 
 class PostUpdate(BaseModel):
+    channel_ids: Optional[List[int]] = None     # يستبدل قنوات المنشور (الناجحة منها تبقى كسجل)
     factory_id: Optional[int] = None
     media_type: Optional[MediaType] = None
     media_urls: Optional[List[str]] = None
@@ -248,15 +247,16 @@ class PostUpdate(BaseModel):
     status: Optional[PostStatus] = None
     approval: Optional[PostApproval] = None
     published_at: Optional[datetime] = None
-    platforms: Optional[str] = Field(default=None, pattern=PLATFORMS_PATTERN, max_length=255)
     scheduled_at: Optional[datetime] = None
     sku: Optional[str] = Field(default=None, max_length=50)
 
 
 class PostDeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    platform: str
-    channel_remote_id: str = ""      # فارغ = معرّف الإعدادات القديم
+    channel_id: int
+    platform: str                    # من القناة
+    channel_name: str
+    channel_remote_id: str
     status: str
     remote_id: Optional[str] = None
     error: Optional[str] = None

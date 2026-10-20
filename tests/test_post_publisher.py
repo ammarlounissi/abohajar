@@ -30,13 +30,17 @@ class FakePublisher(Publisher):
         self.fail = fail          # PublishError لإفشال النشر
         self.crash = crash
         self.invalid = invalid
-        self.calls = 0
+        self._counter = {"n": 0}      # مشترك مع نسخ for_channel (shallow copy) فيرى الاختبار كل الاستدعاءات
+
+    @property
+    def calls(self):
+        return self._counter["n"]
 
     def validate(self, post):
         return self.invalid
 
     async def _publish(self, post):
-        self.calls += 1
+        self._counter["n"] += 1
         if self.crash:
             raise RuntimeError("boom")
         if self.fail:
@@ -51,6 +55,11 @@ class Base_(unittest.TestCase):
         self.db = sessionmaker(bind=engine)()
         self.addCleanup(self.db.close)
         self.db.add(models.Factory(id=1, name="مصنع", phone_number="213550000000"))
+        # قناة لكل منصة، ومعرّفها الداخلي في self.ch (tiktok بلا محوّل لاختبار المنصة غير المدعومة)
+        self.ch = {}
+        for i, (platform, remote) in enumerate((("facebook", "111111"), ("instagram", "222222"), ("tiktok", "333333")), 1):
+            self.db.add(models.SocialChannel(id=i, platform=platform, name=platform, remote_id=remote))
+            self.ch[platform] = i
         self.db.commit()
         for name, value in (("PUBLISH_DAILY_LIMIT", 50), ("PUBLISH_STALE_MINUTES", 30)):
             p = mock.patch.object(settings, name, value)
@@ -61,10 +70,14 @@ class Base_(unittest.TestCase):
                   approved_at=NOW - timedelta(hours=1), media_type="image", **kw):
         post = models.Post(
             factory_id=1, media_type=media_type, media_urls=[] if media_type == "text" else ["https://x/1.jpg"],
-            description="نص", status=status, platforms=platforms, scheduled_at=scheduled_at,
+            description="نص", status=status, scheduled_at=scheduled_at,
             approved_at=approved_at, **kw,
         )
         self.db.add(post)
+        self.db.commit()
+        # platforms: أسماء المنصات مفصولة بفواصل (اختصار للاختبار)، وتصير وجهة pending لقناة كل منصة
+        for name in (platforms.split(",") if platforms else []):
+            self.db.add(models.PostDelivery(post_id=post.id, channel_id=self.ch[name], status="pending", attempts=0))
         self.db.commit()
         return post
 
@@ -141,7 +154,7 @@ class PublishFlowTests(Base_):
         self.assertEqual(ig_ok.calls, 1)
         self.assertEqual(post.status, PostStatus.PUBLISHED)
         self.assertIsNone(post.error)
-        self.assertEqual(summary.outcomes[0].skipped, ["facebook"])
+        self.assertEqual(summary.outcomes[0].skipped, ["facebook:111111"])
         self.assertEqual({d.platform: d.attempts for d in post.deliveries}, {"facebook": 1, "instagram": 2})
 
     def test_all_fail_marks_failed_with_token_kind(self):
@@ -160,7 +173,7 @@ class PublishFlowTests(Base_):
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.FAILED)
         self.assertEqual(ig.calls, 0)
-        self.assertEqual(self.db.scalars(select(models.PublishReport)).one().message, "instagram_requires_media")
+        self.assertEqual(self.db.scalars(select(models.PublishReport)).one().message, "[222222] instagram_requires_media")
 
     def test_unsupported_platform_and_crash_do_not_leave_post_stuck(self):
         post = self.make_post(platforms="tiktok,facebook")
@@ -168,15 +181,16 @@ class PublishFlowTests(Base_):
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.FAILED)
         messages = sorted(r.message for r in self.db.scalars(select(models.PublishReport)))
-        self.assertTrue(messages[0].startswith("RuntimeError"))
-        self.assertEqual(messages[1], "unsupported_platform:tiktok")
+        self.assertEqual(len(messages), 2)
+        self.assertTrue(messages[0].startswith("[111111] RuntimeError"))      # facebook
+        self.assertEqual(messages[1], "[333333] unsupported_platform:tiktok")
 
-    def test_post_without_platforms_fails_cleanly(self):
+    def test_post_without_channels_fails_cleanly(self):
         post = self.make_post(platforms=None)
         self.go({})
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.FAILED)
-        self.assertEqual(post.error, "no_platforms")
+        self.assertEqual(post.error, "no_channels")
 
 
 class LimitsAndDryRunTests(Base_):
@@ -196,8 +210,9 @@ class LimitsAndDryRunTests(Base_):
         self.assertEqual(post.status, PostStatus.APPROVED)
         self.assertIsNone(post.claimed_at)
         self.assertEqual(fb.calls, 0)
-        self.assertEqual(self.db.scalars(select(models.PostDelivery)).all(), [])
+        self.assertEqual({(d.status, d.attempts) for d in post.deliveries}, {("pending", 0)})   # لم يُلمس شيء
         self.assertEqual(summary.outcomes[0].status, "dry-run")
+        self.assertEqual(summary.outcomes[0].channels, ["facebook:111111"])
 
 
 class StaleTests(Base_):
@@ -231,14 +246,10 @@ class ApproveTests(Base_):
             with self.assertRaises(ConflictError):
                 post_publisher.approve_post(self.db, post.id)
 
-    def test_cannot_approve_without_platforms(self):
+    def test_cannot_approve_without_channels(self):
         post = self.make_post(status=PostStatus.DRAFT, platforms=None)
         with self.assertRaises(InvalidInputError):
             post_publisher.approve_post(self.db, post.id)
-
-    def test_parse_platforms(self):
-        self.assertEqual(post_publisher.parse_platforms(" Facebook, instagram,facebook,,"), ["facebook", "instagram"])
-        self.assertEqual(post_publisher.parse_platforms(None), [])
 
 
 if __name__ == "__main__":

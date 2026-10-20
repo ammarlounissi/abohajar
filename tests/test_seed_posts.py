@@ -19,12 +19,7 @@ class SeedBuilderTests(unittest.TestCase):
         self.assertTrue(any(p["media_urls"] == ["https://hadjretbladi.com/B001/1.webp"] for p in posts))
         self.assertTrue(any(len(p["description"]) > 2200 and p["platforms"] == "instagram" for p in posts))
 
-    def test_channels_target_specific_channel_only_for_given_platform(self):
-        posts = build_seed_posts(IMG, None, False, "x", {"facebook": "123456"})
-        self.assertEqual({p["platforms"] for p in posts},
-                         {"facebook:123456", "instagram", "facebook:123456,instagram"})
-
-    def test_no_channels_keeps_plain_platforms(self):
+    def test_platforms_are_plain_names_resolved_to_channels_later(self):
         self.assertEqual({p["platforms"] for p in build_seed_posts(IMG, None, False, "x")},
                          {"facebook", "instagram", "facebook,instagram"})
 

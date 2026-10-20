@@ -1,9 +1,8 @@
-"""النشر التلقائي: اختيار المنشور الجاهز، حجزه، النشر على كل منصة، تحديث الحالات، وكتابة التقارير.
+"""النشر التلقائي: اختيار المنشور الجاهز، حجزه، النشر على كل قناة، تحديث الحالات، وكتابة التقارير.
 
 مستقلة عن القناة والـ HTTP: تُرجع بيانات (RunSummary) والمستدعي (jobs/) يطبعها.
-المنصات نص عادي في posts.platforms: "facebook" = كل قنوات فيسبوك المفعّلة في جدول social_channels،
-و"facebook:123456" = قناة بعينها. إن لم تُسجَّل أي قناة للمنصة في الجدول يُستعمل معرّف الإعدادات القديم
-(META_PAGE_ID / META_IG_USER_ID). ولكل قناة صف في post_deliveries (المنصة + معرّف القناة).
+وجهات المنشور هي صفوف post_deliveries: كل صف يشير إلى قناة من جدول social_channels بمعرّفها الداخلي
+(المنصة ومعرّفها الأصلي وحالة التفعيل تُقرأ من القناة)، وتُحدَّد بـ set_channels عند الإنشاء أو التعديل.
 
 تذكير: عمود status هو Enum(PostStatus) فيُخزَّن باسم العضو (APPROVED) لا بقيمته (approved)،
 لذلك كل الاستعلامات هنا بالـ ORM وليس بنص SQL خام.
@@ -11,7 +10,7 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
@@ -20,7 +19,6 @@ from app import models
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models import DeliveryStatus, PostStatus, ReportKind
-from app.services import social_channels as channel_service
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.social import build_publishers
 from app.services.social.base import Publisher, PublishError, PublishResult
@@ -37,7 +35,7 @@ UNPUBLISHED = (PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.APPROVED, Post
 class PostOutcome:
     post_id: int
     status: str                                   # حالة المنشور النهائية (أو "dry-run")
-    platforms: List[str]
+    channels: List[str]                           # وصف كل قناة مستهدفة (facebook:123456)
     results: List[PublishResult] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)   # منصات نُشر عليها سابقاً فلم تُعَد
 
@@ -54,70 +52,51 @@ class RunSummary:
         return sum(1 for o in self.outcomes for r in o.results if not r.ok)
 
 
-def parse_targets(value: Optional[str]) -> List[Tuple[str, Optional[str]]]:
-    """'Facebook, instagram,facebook:123' -> [('facebook', None), ('instagram', None), ('facebook', '123')].
-    None = كل قنوات المنصة المفعّلة. بلا تكرار وبالترتيب. معرّف القناة يُحفظ بحالته (لا يُصغَّر)."""
-    seen: List[Tuple[str, Optional[str]]] = []
-    for item in (value or "").split(","):
-        name, _, remote_id = item.strip().partition(":")
-        target = (name.strip().lower(), remote_id.strip() or None)
-        if target[0] and target not in seen:
-            seen.append(target)
-    return seen
+def _label(delivery: models.PostDelivery) -> str:
+    return delivery.channel.label
 
 
-def parse_platforms(value: Optional[str]) -> List[str]:
-    """'Facebook, instagram,facebook:123' -> ['facebook', 'instagram'] (أسماء المنصات بلا تكرار وبالترتيب)."""
-    seen: List[str] = []
-    for platform, _ in parse_targets(value):
-        if platform not in seen:
-            seen.append(platform)
-    return seen
+# ---------------------------------------------------------------- قنوات المنشور
+
+SETTABLE = (PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.APPROVED, PostStatus.FAILED)
 
 
-@dataclass(frozen=True)
-class Target:
-    """وجهة نشر واحدة. remote_id فارغ = معرّف الإعدادات القديم. error يُملأ إن تعذّر تحديد القناة
-    (لا ننشر إلى شيء غير مقصود: يُسجَّل فشل واضح بدل ذلك)."""
-    platform: str
-    remote_id: str = ""
-    error: Optional[str] = None
-
-    @property
-    def label(self) -> str:
-        return f"{self.platform}:{self.remote_id}" if self.remote_id else self.platform
-
-    @property
-    def key(self) -> Tuple[str, str]:
-        return (self.platform, self.remote_id)
+def active_channel_ids(db: Session, platform: Optional[str] = None) -> List[int]:
+    """معرّفات القنوات المفعّلة (كلها أو لمنصة واحدة): الاختيار الافتراضي عند إنشاء منشور."""
+    query = select(models.SocialChannel.id).where(models.SocialChannel.is_active.is_(True))
+    if platform:
+        query = query.where(models.SocialChannel.platform == platform)
+    return list(db.scalars(query.order_by(models.SocialChannel.id)))
 
 
-def resolve_targets(db: Session, post: models.Post) -> List[Target]:
-    """من posts.platforms إلى وجهات فعلية.
-    - "facebook": كل القنوات المفعّلة للمنصة. إن لم تُسجَّل للمنصة أي قناة أصلاً -> معرّف الإعدادات القديم.
-      وإن سُجّلت قنوات وكلها معطّلة -> فشل (لا نرجع إلى الإعدادات بصمت بعد أن عطّلها المدير).
-    - "facebook:123": هذه القناة فقط، ويجب أن تكون مسجّلة ومفعّلة."""
-    targets: List[Target] = []
-
-    def add(target: Target) -> None:
-        if target.key not in [t.key for t in targets]:
-            targets.append(target)
-
-    for platform, remote_id in parse_targets(post.platforms):
-        if remote_id:
-            found = [c for c in channel_service.list_active(db, platform) if c.remote_id == remote_id]
-            add(Target(platform, remote_id) if found
-                else Target(platform, remote_id, error=f"channel_not_found_or_inactive:{platform}:{remote_id}"))
-            continue
-        active = channel_service.list_active(db, platform)
-        if active:
-            for channel in active:
-                add(Target(platform, channel.remote_id))
-        elif channel_service.list_channels(db, platform=platform):
-            add(Target(platform, error=f"no_active_channel:{platform}"))
-        else:
-            add(Target(platform))
-    return targets
+def set_channels(db: Session, post: models.Post, channel_ids: Iterable[int]) -> models.Post:
+    """يجعل قنوات المنشور هي channel_ids بالضبط (بلا تكرار، وبترتيب الإدخال).
+    - قناة جديدة تُنشأ لها وجهة pending، ويجب أن تكون موجودة ومفعّلة.
+    - وجهة ناجحة (published) لا تُحذف أبداً: هي سجل ما نُشر، وتبقى حتى لو غابت عن القائمة.
+    - وجهة pending أو failed غابت عن القائمة تُحذف.
+    لا يُعدَّل منشور قيد النشر أو منشور أو مؤرشف."""
+    if post.status not in SETTABLE:
+        raise ConflictError(f"لا يمكن تعديل قنوات منشور حالته {post.status.value}")
+    wanted = list(dict.fromkeys(int(c) for c in channel_ids))
+    channels = {c.id: c for c in db.scalars(select(models.SocialChannel).where(models.SocialChannel.id.in_(wanted)))} if wanted else {}
+    missing = [c for c in wanted if c not in channels]
+    if missing:
+        raise NotFoundError(f"قنوات غير موجودة: {', '.join(map(str, missing))}")
+    current = {d.channel_id: d for d in post.deliveries}
+    inactive = [c for c in wanted if c not in current and not channels[c].is_active]
+    if inactive:
+        raise InvalidInputError(f"قنوات معطّلة: {', '.join(map(str, inactive))}")
+    for channel_id, delivery in current.items():
+        if channel_id not in wanted and delivery.status != DeliveryStatus.PUBLISHED.value:
+            post.deliveries.remove(delivery)
+    for channel_id in wanted:
+        if channel_id not in current:
+            post.deliveries.append(models.PostDelivery(
+                post_id=post.id, channel_id=channel_id, status=DeliveryStatus.PENDING.value, attempts=0,
+            ))
+    db.commit()
+    db.refresh(post)
+    return post
 
 
 # ---------------------------------------------------------------- الموافقة
@@ -129,8 +108,8 @@ def approve_post(db: Session, post_id: int, now: Optional[datetime] = None) -> m
         raise NotFoundError("المنشور غير موجود")
     if post.status not in APPROVABLE:
         raise ConflictError(f"لا يمكن اعتماد منشور حالته {post.status.value}")
-    if not parse_platforms(post.platforms):
-        raise InvalidInputError("حدّد المنصات (platforms) قبل اعتماد المنشور")
+    if not post.deliveries:
+        raise InvalidInputError("حدّد قناة نشر واحدة على الأقل قبل اعتماد المنشور")
     post.status = PostStatus.APPROVED
     post.approval = models.PostApproval.APPROVED
     post.approved_at = now or datetime.utcnow()
@@ -169,8 +148,8 @@ def claim_post(db: Session, post_id: int, now: Optional[datetime] = None) -> mod
     post = db.get(models.Post, post_id)
     if not post:
         raise NotFoundError("المنشور غير موجود")
-    if not parse_platforms(post.platforms):
-        raise InvalidInputError("حدّد المنصات (platforms) قبل النشر")
+    if not post.deliveries:
+        raise InvalidInputError("حدّد قناة نشر واحدة على الأقل قبل النشر")
     row = db.execute(
         update(models.Post)
         .where(models.Post.id == post_id, models.Post.status.in_(MANUALLY_PUBLISHABLE))
@@ -279,44 +258,31 @@ def report_stale(db: Session, now: datetime) -> List[int]:
 
 # ---------------------------------------------------------------- النشر
 
-def _get_or_create_deliveries(
-    db: Session, post: models.Post, targets: List[Target],
-) -> Dict[Tuple[str, str], models.PostDelivery]:
-    existing = {(d.platform, d.channel_remote_id or ""): d for d in post.deliveries}
-    for target in targets:
-        if target.key not in existing:
-            delivery = models.PostDelivery(
-                post_id=post.id, platform=target.platform, channel_remote_id=target.remote_id,
-                status=DeliveryStatus.PENDING.value, attempts=0,
-            )
-            db.add(delivery)
-            existing[target.key] = delivery
-    db.commit()
-    return {t.key: existing[t.key] for t in targets}
+def _channel_problem(publishers: Dict[str, Publisher], channel: models.SocialChannel) -> Optional[PublishError]:
+    """سبب يمنع النشر على القناة قبل أي طلب شبكة (معطّلة أو منصتها بلا محوّل)."""
+    if not channel.is_active:
+        return PublishError(ReportKind.UNKNOWN, f"channel_inactive:{channel.label}")
+    if publishers.get(channel.platform) is None:
+        return PublishError(ReportKind.UNKNOWN, f"unsupported_platform:{channel.platform}")
+    return None
 
 
-def _publisher_for(publishers: Dict[str, Publisher], target: Target) -> Optional[Publisher]:
-    publisher = publishers.get(target.platform)
-    if publisher is not None and target.remote_id:
-        return publisher.for_channel(target.remote_id)
-    return publisher
-
-
-async def _publish_to_target(publisher: Optional[Publisher], target: Target, post: models.Post) -> PublishResult:
-    platform = target.platform
-    if target.error:
-        result = PublishResult(platform, False, error=target.error, kind=ReportKind.UNKNOWN)
-    elif publisher is None:
-        result = PublishResult(platform, False, error=f"unsupported_platform:{platform}", kind=ReportKind.UNKNOWN)
+async def _publish_to_channel(publishers: Dict[str, Publisher], channel: models.SocialChannel, post: models.Post) -> PublishResult:
+    platform = channel.platform
+    problem = _channel_problem(publishers, channel)
+    if problem:
+        result = PublishResult(platform, False, error=problem.message, kind=problem.kind)
     else:
+        publisher = publishers[platform].for_channel(channel.remote_id)
         try:
             result = await publisher.publish(post)
         except PublishError as exc:
             result = PublishResult(platform, False, error=exc.message, kind=exc.kind)
         except Exception as exc:    # خلل غير متوقع في محوّل: لا نترك المنشور عالقاً
-            logger.exception("publisher %s crashed for post %s", target.label, post.id)
+            logger.exception("publisher %s crashed for post %s", channel.label, post.id)
             result = PublishResult(platform, False, error=f"{type(exc).__name__}: {exc}"[:500], kind=ReportKind.UNKNOWN)
-    result.channel_remote_id = target.remote_id
+    result.channel_id = channel.id
+    result.channel_label = channel.label
     return result
 
 
@@ -330,46 +296,39 @@ def _record_result(db: Session, post: models.Post, delivery: models.PostDelivery
         delivery.status = DeliveryStatus.FAILED.value
         delivery.error = result.error
         kind = result.kind or ReportKind.UNKNOWN
-        message = result.error or ""
-        if delivery.channel_remote_id:      # التقرير يذكر القناة حين تتعدد قنوات المنصة
-            message = f"[{delivery.channel_remote_id}] {message}"
         db.add(models.PublishReport(
-            post_id=post.id, platform=delivery.platform, kind=kind.value, message=message, created_at=now,
+            post_id=post.id, platform=delivery.channel.platform, kind=kind.value,
+            message=f"[{delivery.channel.remote_id}] {result.error or ''}", created_at=now,
         ))
     db.commit()
 
 
 async def publish_post(db: Session, post: models.Post, publishers: Dict[str, Publisher], now: datetime) -> PostOutcome:
     """ينشر منشوراً محجوزاً على قنواته. القنوات التي نُشر عليها سابقاً لا تُعاد."""
-    targets = resolve_targets(db, post)
-    if not targets:
+    deliveries = list(post.deliveries)
+    if not deliveries:
         post.status = PostStatus.FAILED
-        post.error = "no_platforms"
-        db.add(models.PublishReport(post_id=post.id, kind=ReportKind.UNKNOWN.value, message="no_platforms", created_at=now))
+        post.error = "no_channels"
+        db.add(models.PublishReport(post_id=post.id, kind=ReportKind.UNKNOWN.value, message="no_channels", created_at=now))
         db.commit()
         return PostOutcome(post.id, PostStatus.FAILED.value, [])
 
-    deliveries = _get_or_create_deliveries(db, post, targets)
-    outcome = PostOutcome(post.id, PostStatus.PUBLISHING.value, [t.label for t in targets])
-
-    for target in targets:
-        delivery = deliveries[target.key]
+    outcome = PostOutcome(post.id, PostStatus.PUBLISHING.value, [_label(d) for d in deliveries])
+    for delivery in deliveries:
         if delivery.status == DeliveryStatus.PUBLISHED.value:
-            outcome.skipped.append(target.label)
+            outcome.skipped.append(_label(delivery))
             continue
         delivery.status = DeliveryStatus.PUBLISHING.value
         delivery.attempts = (delivery.attempts or 0) + 1
         db.commit()
-        result = await _publish_to_target(_publisher_for(publishers, target), target, post)
+        result = await _publish_to_channel(publishers, delivery.channel, post)
         _record_result(db, post, delivery, result, datetime.utcnow())
         outcome.results.append(result)
 
-    failed = [d for d in deliveries.values() if d.status != DeliveryStatus.PUBLISHED.value]
+    failed = [d for d in deliveries if d.status != DeliveryStatus.PUBLISHED.value]
     if failed:
         post.status = PostStatus.FAILED
-        post.error = "; ".join(
-            f"{d.platform}{':' + d.channel_remote_id if d.channel_remote_id else ''}: {d.error}" for d in failed
-        )[:1000]
+        post.error = "; ".join(f"{_label(d)}: {d.error}" for d in failed)[:1000]
     else:
         post.status = PostStatus.PUBLISHED
         post.published_at = datetime.utcnow()
@@ -406,21 +365,17 @@ async def publish_due(
             post = peek_next_due(db, now)
             if not post:
                 break
-            targets = resolve_targets(db, post)
             results = []
-            for target in targets:
-                publisher = _publisher_for(publishers, target)
-                if target.error:
-                    problem = PublishError(ReportKind.UNKNOWN, target.error)
-                elif publisher is None:
-                    problem = PublishError(ReportKind.UNKNOWN, f"unsupported_platform:{target.platform}")
-                else:
-                    problem = publisher.validate(post)
+            for delivery in post.deliveries:
+                channel = delivery.channel
+                problem = _channel_problem(publishers, channel)
+                if problem is None:
+                    problem = publishers[channel.platform].for_channel(channel.remote_id).validate(post)
                 results.append(PublishResult(
-                    target.platform, problem is None, error=problem.message if problem else None,
-                    kind=problem.kind if problem else None, channel_remote_id=target.remote_id,
+                    channel.platform, problem is None, error=problem.message if problem else None,
+                    kind=problem.kind if problem else None, channel_id=channel.id, channel_label=channel.label,
                 ))
-            summary.outcomes.append(PostOutcome(post.id, "dry-run", [t.label for t in targets], results))
+            summary.outcomes.append(PostOutcome(post.id, "dry-run", [_label(d) for d in post.deliveries], results))
             break      # لا حجز في التجربة، فلن يتغير المنشور التالي
         post = claim_next(db, now)
         if not post:

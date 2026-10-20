@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.models import ChannelPlatform
-from app.services.errors import DuplicateError, InvalidInputError, NotFoundError
+from app.services.errors import ConflictError, DuplicateError, InvalidInputError, NotFoundError
 
 _NUMERIC_ID = re.compile(r"[0-9]{5,30}")
 _TELEGRAM_ID = re.compile(r"-?[0-9]{5,20}|@[A-Za-z][A-Za-z0-9_]{4,31}")
@@ -97,5 +97,7 @@ def update_channel(db: Session, channel_id: int, values: dict) -> models.SocialC
 
 def delete_channel(db: Session, channel_id: int) -> None:
     channel = get_channel(db, channel_id)
+    if db.query(models.PostDelivery).filter(models.PostDelivery.channel_id == channel_id).first():
+        raise ConflictError("للقناة منشورات مرتبطة بها: عطّلها (is_active=false) بدل حذفها")
     db.delete(channel)
     db.commit()

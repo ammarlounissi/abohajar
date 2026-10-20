@@ -1,6 +1,6 @@
-"""عدة قنوات في المنصة الواحدة: تحديد الوجهات، النشر لكل قناة، إعادة المحاولة، والرجوع لمعرّف الإعدادات."""
+"""قنوات النشر بمعرّفها الداخلي: تحديد قنوات المنشور (set_channels)، النشر لكل قناة، إعادة المحاولة،
+القنوات المعطّلة، وحماية القناة من الحذف. بلا شبكة: قاعدة SQLite في الذاكرة ومحوّلات وهمية."""
 import asyncio
-import re
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
@@ -9,11 +9,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app import models, schemas
+from app import models
 from app.core.config import settings
 from app.core.database import Base
 from app.models import PostStatus
 from app.services import post_publisher
+from app.services import social_channels as channel_service
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.social.base import Publisher, PublishError
 from app.services.social.facebook import FacebookPublisher
 
@@ -21,7 +23,7 @@ NOW = datetime(2026, 10, 17, 7, 0, 0)
 
 
 class RecordingPublisher(Publisher):
-    """يسجّل (القناة) في قائمة مشتركة بين النسخ التي ينتجها for_channel."""
+    """يسجّل (المنصة، المعرّف الأصلي للقناة) في قائمة مشتركة بين النسخ التي ينتجها for_channel."""
 
     def __init__(self, platform, log, fail_on=()):
         self.platform = platform
@@ -52,17 +54,21 @@ class Base_(unittest.TestCase):
             self.addCleanup(p.stop)
         self.log = []
 
-    def channel(self, platform, remote_id, active=True):
-        self.db.add(models.SocialChannel(platform=platform, name=remote_id, remote_id=remote_id, is_active=active))
+    def channel(self, platform, remote_id, active=True) -> int:
+        channel = models.SocialChannel(platform=platform, name=remote_id, remote_id=remote_id, is_active=active)
+        self.db.add(channel)
         self.db.commit()
+        return channel.id
 
-    def post(self, platforms):
+    def post(self, *channel_ids, status=PostStatus.APPROVED):
         post = models.Post(
             factory_id=1, media_type="image", media_urls=["https://x/1.jpg"], description="نص",
-            status=PostStatus.APPROVED, platforms=platforms, approved_at=NOW - timedelta(hours=1),
+            status=status, approved_at=NOW - timedelta(hours=1),
         )
         self.db.add(post)
         self.db.commit()
+        if channel_ids:
+            post_publisher.set_channels(self.db, post, channel_ids)
         return post
 
     def publishers(self, fail_on=()):
@@ -73,62 +79,63 @@ class Base_(unittest.TestCase):
         return asyncio.run(post_publisher.publish_due(self.db, publishers=publishers, now=NOW, **kw))
 
 
-class ParsingTests(unittest.TestCase):
-    def test_parse_targets(self):
-        self.assertEqual(
-            post_publisher.parse_targets("Facebook, instagram,facebook:123,facebook:123,telegram:@My_Chan"),
-            [("facebook", None), ("instagram", None), ("facebook", "123"), ("telegram", "@My_Chan")],
-        )
-        self.assertEqual(post_publisher.parse_platforms("facebook:1,facebook:2,instagram"), ["facebook", "instagram"])
+class SetChannelsTests(Base_):
+    def test_creates_pending_deliveries_in_input_order_without_duplicates(self):
+        a, b = self.channel("facebook", "111111"), self.channel("instagram", "999999")
+        post = self.post(b, a, b)
+        self.assertEqual([(d.channel_id, d.status) for d in post.deliveries], [(b, "pending"), (a, "pending")])
+        self.assertEqual([d.platform for d in post.deliveries], ["instagram", "facebook"])    # من القناة لا من المنشور
 
-    def test_schema_pattern_accepts_channel_tokens(self):
-        for ok in ("facebook", "facebook,instagram", "facebook:123456789012345,instagram", "telegram:-1001234567890",
-                   "telegram:@my_channel"):
-            self.assertTrue(re.match(schemas.PLATFORMS_PATTERN, ok), ok)
-        for bad in ("Facebook", "facebook:", "facebook:a b", "facebook,,instagram", ":123"):
-            self.assertFalse(re.match(schemas.PLATFORMS_PATTERN, bad), bad)
+    def test_unknown_and_inactive_channels_are_rejected(self):
+        ok = self.channel("facebook", "111111")
+        off = self.channel("facebook", "222222", active=False)
+        post = self.post()
+        with self.assertRaises(NotFoundError):
+            post_publisher.set_channels(self.db, post, [ok, 9999])
+        with self.assertRaises(InvalidInputError):
+            post_publisher.set_channels(self.db, post, [ok, off])
+        self.assertEqual(post.deliveries, [])        # الطلب المرفوض لا يترك أثراً
 
+    def test_replace_drops_pending_and_failed_but_keeps_published(self):
+        a, b, c = (self.channel("facebook", x) for x in ("111111", "222222", "333333"))
+        post = self.post(a, b, c)
+        by_channel = {d.channel_id: d for d in post.deliveries}
+        by_channel[a].status = "published"
+        by_channel[b].status = "failed"
+        self.db.commit()
+        post_publisher.set_channels(self.db, post, [c])
+        self.assertEqual({d.channel_id for d in post.deliveries}, {a, c})     # الناجحة تبقى، الفاشلة حُذفت
 
-class ResolveTests(Base_):
-    def test_platform_name_means_all_active_channels(self):
-        self.channel("facebook", "111111"); self.channel("facebook", "222222")
+    def test_empty_list_clears_pending(self):
+        a = self.channel("facebook", "111111")
+        post = self.post(a)
+        post_publisher.set_channels(self.db, post, [])
+        self.assertEqual(post.deliveries, [])
+
+    def test_published_or_publishing_post_cannot_change_channels(self):
+        a = self.channel("facebook", "111111")
+        for status in (PostStatus.PUBLISHED, PostStatus.PUBLISHING, PostStatus.ARCHIVED):
+            with self.assertRaises(ConflictError):
+                post_publisher.set_channels(self.db, self.post(status=status), [a])
+
+    def test_active_channel_ids(self):
+        fb, ig = self.channel("facebook", "111111"), self.channel("instagram", "222222")
         self.channel("facebook", "333333", active=False)
-        targets = post_publisher.resolve_targets(self.db, self.post("facebook"))
-        self.assertEqual([t.key for t in targets], [("facebook", "111111"), ("facebook", "222222")])
+        self.assertEqual(post_publisher.active_channel_ids(self.db), [fb, ig])
+        self.assertEqual(post_publisher.active_channel_ids(self.db, "instagram"), [ig])
 
-    def test_specific_channel(self):
-        self.channel("facebook", "111111"); self.channel("facebook", "222222")
-        targets = post_publisher.resolve_targets(self.db, self.post("facebook:222222"))
-        self.assertEqual([t.key for t in targets], [("facebook", "222222")])
-        self.assertIsNone(targets[0].error)
-
-    def test_specific_channel_unknown_or_inactive_is_error(self):
-        self.channel("facebook", "111111", active=False)
-        for platforms in ("facebook:111111", "facebook:999999"):
-            with self.subTest(platforms=platforms):
-                (target,) = post_publisher.resolve_targets(self.db, self.post(platforms))
-                self.assertTrue(target.error.startswith("channel_not_found_or_inactive"))
-
-    def test_no_channels_registered_falls_back_to_settings(self):
-        (target,) = post_publisher.resolve_targets(self.db, self.post("facebook"))
-        self.assertEqual(target.key, ("facebook", ""))
-        self.assertIsNone(target.error)
-
-    def test_all_channels_disabled_does_not_fall_back_to_settings(self):
-        self.channel("facebook", "111111", active=False)
-        (target,) = post_publisher.resolve_targets(self.db, self.post("facebook"))
-        self.assertEqual(target.error, "no_active_channel:facebook")
-
-    def test_platforms_are_independent(self):
-        self.channel("facebook", "111111")
-        keys = [t.key for t in post_publisher.resolve_targets(self.db, self.post("facebook,instagram"))]
-        self.assertEqual(keys, [("facebook", "111111"), ("instagram", "")])
+    def test_channel_with_deliveries_cannot_be_deleted(self):
+        a, b = self.channel("facebook", "111111"), self.channel("facebook", "222222")
+        self.post(a)
+        with self.assertRaises(ConflictError):
+            channel_service.delete_channel(self.db, a)
+        channel_service.delete_channel(self.db, b)       # بلا منشورات: يُحذف
 
 
 class PublishTests(Base_):
-    def test_publishes_to_every_active_channel_of_a_platform(self):
-        self.channel("facebook", "111111"); self.channel("facebook", "222222"); self.channel("instagram", "999999")
-        post = self.post("facebook,instagram")
+    def test_publishes_to_every_selected_channel(self):
+        f1, f2, i1 = self.channel("facebook", "111111"), self.channel("facebook", "222222"), self.channel("instagram", "999999")
+        post = self.post(f1, f2, i1)
         summary = self.go(self.publishers())
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.PUBLISHED)
@@ -139,17 +146,27 @@ class PublishTests(Base_):
              ("instagram", "999999", "published")],
         )
         self.assertEqual(summary.failures, 0)
-        self.assertEqual({r.channel_remote_id for r in summary.outcomes[0].results}, {"111111", "222222", "999999"})
+        self.assertEqual({r.channel_id for r in summary.outcomes[0].results}, {f1, f2, i1})
+        self.assertEqual({r.channel_label for r in summary.outcomes[0].results},
+                         {"facebook:111111", "facebook:222222", "instagram:999999"})
+
+    def test_unselected_channels_are_not_used(self):
+        f1 = self.channel("facebook", "111111")
+        self.channel("facebook", "222222")
+        self.post(f1)
+        self.go(self.publishers())
+        self.assertEqual(self.log, [("facebook", "111111")])
 
     def test_partial_failure_then_retry_only_failed_channel(self):
-        self.channel("facebook", "111111"); self.channel("facebook", "222222")
-        post = self.post("facebook")
+        f1, f2 = self.channel("facebook", "111111"), self.channel("facebook", "222222")
+        post = self.post(f1, f2)
         self.go(self.publishers(fail_on={"222222"}))
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.FAILED)
         self.assertIn("facebook:222222", post.error)
         report = self.db.query(models.PublishReport).one()
         self.assertTrue(report.message.startswith("[222222]"))
+        self.assertEqual(report.platform, "facebook")
 
         self.log.clear()
         post_publisher.approve_post(self.db, post.id, NOW)
@@ -159,29 +176,33 @@ class PublishTests(Base_):
         self.assertEqual(self.log, [("facebook", "222222")])      # الناجحة لم تُعَد
         self.assertEqual(len(post.deliveries), 2)
 
-    def test_missing_channel_fails_without_calling_publisher(self):
-        post = self.post("facebook:999999")
+    def test_channel_disabled_after_assignment_fails_without_calling_publisher(self):
+        a, b = self.channel("facebook", "111111"), self.channel("facebook", "222222")
+        post = self.post(a, b)
+        channel_service.update_channel(self.db, b, {"is_active": False})
         self.go(self.publishers())
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.FAILED)
-        self.assertEqual(self.log, [])
-        self.assertIn("channel_not_found_or_inactive", post.error)
+        self.assertEqual(self.log, [("facebook", "111111")])
+        self.assertIn("channel_inactive:facebook:222222", post.error)
 
-    def test_legacy_settings_path_unchanged(self):
-        post = self.post("facebook")
-        self.go(self.publishers())
+    def test_no_fallback_to_settings_ids(self):
+        post = self.post()       # بلا قنوات: لا يرجع الناشر إلى META_PAGE_ID
+        with mock.patch.object(settings, "META_PAGE_ID", "777777"):
+            self.go(self.publishers())
         self.db.refresh(post)
-        self.assertEqual(self.log, [("facebook", None)])
-        (delivery,) = post.deliveries
-        self.assertEqual(delivery.channel_remote_id, "")
+        self.assertEqual(post.status, PostStatus.FAILED)
+        self.assertEqual(post.error, "no_channels")
+        self.assertEqual(self.log, [])
 
     def test_dry_run_lists_each_channel_and_does_not_claim(self):
-        self.channel("facebook", "111111"); self.channel("facebook", "222222")
-        post = self.post("facebook")
+        f1, f2 = self.channel("facebook", "111111"), self.channel("facebook", "222222")
+        post = self.post(f1, f2)
         summary = self.go(self.publishers(), dry_run=True)
         self.db.refresh(post)
         self.assertEqual(post.status, PostStatus.APPROVED)
-        self.assertEqual(summary.outcomes[0].platforms, ["facebook:111111", "facebook:222222"])
+        self.assertEqual(summary.outcomes[0].channels, ["facebook:111111", "facebook:222222"])
+        self.assertTrue(all(r.ok for r in summary.outcomes[0].results))
         self.assertEqual(self.log, [])
 
 

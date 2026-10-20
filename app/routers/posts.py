@@ -19,9 +19,17 @@ router = APIRouter(
 def create_post(post: schemas.PostCreate, db: Session = Depends(get_db)):
     if not db.query(models.Factory).filter(models.Factory.id == post.factory_id).first():
         raise HTTPException(status_code=404, detail="المصنع غير موجود")
-    new_post = models.Post(**post.model_dump())
+    new_post = models.Post(**post.model_dump(exclude={"channel_ids"}))
     db.add(new_post)
-    db.commit()
+    db.flush()
+    try:
+        if post.channel_ids:
+            post_publisher.set_channels(db, new_post, post.channel_ids)    # يرفع ServiceError لقناة غير صالحة
+        else:
+            db.commit()
+    except Exception:
+        db.rollback()      # لا يبقى منشور بلا القنوات المطلوبة عند فشل الطلب
+        raise
     db.refresh(new_post)
     return new_post
 
@@ -72,12 +80,15 @@ def update_post(post_id: int, update: schemas.PostUpdate, db: Session = Depends(
     if not post:
         raise HTTPException(status_code=404, detail="المنشور غير موجود")
     values = update.model_dump(exclude_unset=True)
+    channel_ids = values.pop("channel_ids", None)
     if "factory_id" in values and not db.query(models.Factory).filter(
         models.Factory.id == values["factory_id"]
     ).first():
         raise HTTPException(status_code=404, detail="المصنع غير موجود")
     for key, value in values.items():
         setattr(post, key, value)
+    if channel_ids is not None:
+        post_publisher.set_channels(db, post, channel_ids)    # يحفظ التعديلات كلها في commit واحد
     db.commit()
     db.refresh(post)
     return post

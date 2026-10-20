@@ -37,7 +37,8 @@ class PublishResult:
     remote_id: Optional[str] = None
     error: Optional[str] = None
     kind: Optional[ReportKind] = None      # يُملأ عند الفشل فقط
-    channel_remote_id: str = ""            # القناة التي نُشر إليها ("" = معرّف الإعدادات القديم)
+    channel_id: Optional[int] = None       # معرّف القناة الداخلي (social_channels.id)
+    channel_label: str = ""                # facebook:123456 للطباعة والسجلات
 
 
 def classify_graph_error(http_status: int, error: Optional[dict]) -> ReportKind:

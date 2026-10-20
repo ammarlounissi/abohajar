@@ -125,6 +125,11 @@ class SocialChannel(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
+    @property
+    def label(self) -> str:
+        """وصف قصير للسجلات والطرفية: facebook:123456."""
+        return f"{self.platform}:{self.remote_id}"
+
 
 class Product(Base):
     """المنتجات، متوافقة مع Meta Commerce Graph API"""
@@ -161,7 +166,7 @@ class Product(Base):
 
 class Post(Base):
     """منشور مخصص للنشر على مواقع التواصل الاجتماعي.
-    description هو نص المنشور (caption) الذي يُنشر كما هو."""
+    description هو نص المنشور (caption) الذي يُنشر كما هو. قنواته هي post_deliveries."""
     __tablename__ = "posts"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -175,8 +180,7 @@ class Post(Base):
     published_at = Column(DateTime, nullable=True)
 
     # --- النشر التلقائي (المرحلة الأولى) ---
-    # مثل "facebook,instagram" (كل القنوات المفعّلة للمنصة) أو "facebook:123456" (قناة بعينها)
-    platforms = Column(String(255), nullable=True)
+    # وجهات النشر هي صفوف post_deliveries (قناة لكل صف، بمعرّفها الداخلي في social_channels)
     scheduled_at = Column(DateTime, nullable=True)        # لا يُنشر قبله (UTC)
     approved_at = Column(DateTime, nullable=True)
     claimed_at = Column(DateTime, nullable=True)          # وقت الحجز، لكشف العالقين
@@ -184,22 +188,23 @@ class Post(Base):
     sku = Column(String(50), nullable=True, index=True)   # إن وُجد يبقى كما هو، الناشر لا يلمسه
 
     factory = relationship("Factory", back_populates="posts")
-    deliveries = relationship("PostDelivery", back_populates="post", cascade="all, delete-orphan")
+    deliveries = relationship(
+        "PostDelivery", back_populates="post", cascade="all, delete-orphan", order_by="PostDelivery.id",
+    )
 
 
 class PostDelivery(Base):
-    """نتيجة النشر على قناة واحدة (منصة + معرّفها الأصلي). القيد الفريد يمنع النشر المزدوج، وعند
-    إعادة المحاولة تُنشر القناة الفاشلة وحدها. المنصة نص عادي (لا Enum) كي لا تحتاج منصة جديدة إلى ترحيل.
-    channel_remote_id فارغ ("") = النشر القديم بمعرّف الإعدادات (META_PAGE_ID / META_IG_USER_ID)."""
+    """وجهة نشر واحدة لمنشور: قناة من social_channels (المنصة ومعرّفها الأصلي يُقرآن منها ولا يُكرَّران هنا).
+    الصف يُنشأ عند تحديد قنوات المنشور بحالة pending، ثم تتبعه نتيجة النشر. القيد الفريد يمنع النشر المزدوج،
+    وعند إعادة المحاولة تُنشر القنوات غير الناجحة وحدها. حذف قناة لها تسليمات مرفوض (عطّلها بدل حذفها)."""
     __tablename__ = "post_deliveries"
     __table_args__ = (
-        UniqueConstraint("post_id", "platform", "channel_remote_id", name="uq_post_deliveries_post_platform_channel"),
+        UniqueConstraint("post_id", "channel_id", name="uq_post_deliveries_post_channel"),
     )
 
     id = Column(Integer, primary_key=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
-    platform = Column(String(30), nullable=False)
-    channel_remote_id = Column(String(100), nullable=False, default="", server_default="")
+    channel_id = Column(Integer, ForeignKey("social_channels.id", ondelete="RESTRICT"), nullable=False, index=True)
     status = Column(String(20), nullable=False, default=DeliveryStatus.PENDING.value)
     remote_id = Column(String(100), nullable=True)
     error = Column(Text, nullable=True)
@@ -207,6 +212,19 @@ class PostDelivery(Base):
     published_at = Column(DateTime, nullable=True)
 
     post = relationship("Post", back_populates="deliveries")
+    channel = relationship("SocialChannel")
+
+    @property
+    def platform(self) -> str:
+        return self.channel.platform
+
+    @property
+    def channel_name(self) -> str:
+        return self.channel.name
+
+    @property
+    def channel_remote_id(self) -> str:
+        return self.channel.remote_id
 
 
 class PublishReport(Base):
