@@ -97,6 +97,8 @@ class ProductBase(BaseModel):
     category_code: str = Field(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")
     tags: List[str] = Field(default_factory=list, max_length=30)
     title: str = Field(min_length=2, max_length=255)
+    commercial_name: Optional[str] = Field(default=None, max_length=255)
+    sizes: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     price: float = Field(gt=0)
     currency: str = Field(default="DZD", min_length=3, max_length=3)
@@ -139,6 +141,8 @@ class ProductUpdate(BaseModel):
     category_code: Optional[str] = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]+$")
     tags: Optional[List[str]] = Field(default=None, max_length=30)
     title: Optional[str] = Field(default=None, min_length=2, max_length=255)
+    commercial_name: Optional[str] = Field(default=None, max_length=255)
+    sizes: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = None
     price: Optional[float] = Field(default=None, gt=0)
     availability: Optional[Availability] = None
@@ -189,6 +193,8 @@ class ProductPublicResponse(BaseModel):
     category_code: str
     tags: List[str] = Field(default_factory=list)
     title: str
+    commercial_name: Optional[str] = None
+    sizes: Optional[str] = None
     description: Optional[str] = None
     price: float
     currency: str

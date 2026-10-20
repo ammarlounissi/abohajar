@@ -136,6 +136,8 @@ class Product(Base):
     category_code = Column(String(20), nullable=False, index=True)
     tags = Column(JSON, nullable=False, default=list)
     title = Column(String(255), nullable=False)
+    commercial_name = Column(String(255), nullable=True)
+    sizes = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
     price = Column(Float, nullable=False)
     currency = Column(String(10), default="DZD", nullable=False)
