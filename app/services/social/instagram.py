@@ -8,6 +8,7 @@ from app.services.social.base import (
     INSTAGRAM_CAPTION_LIMIT, Publisher, PublishError, is_http_url, url_extension,
 )
 from app.services.social.graph import graph_call, make_client
+from app.services.instagram_media import prepare_instagram_image, prepare_instagram_video
 
 
 class InstagramPublisher(Publisher):
@@ -39,8 +40,6 @@ class InstagramPublisher(Publisher):
         if not is_http_url(url):
             return PublishError(ReportKind.MEDIA, "media_url_not_http")
         ext = url_extension(url)
-        if media_type == "image" and ext not in (".jpg", ".jpeg"):
-            return PublishError(ReportKind.MEDIA, f"instagram_image_must_be_jpeg:{ext or 'none'}")
         if media_type == "reel" and ext != ".mp4":
             return PublishError(ReportKind.MEDIA, f"instagram_reel_must_be_mp4:{ext or 'none'}")
         return None
@@ -67,9 +66,12 @@ class InstagramPublisher(Publisher):
         is_reel = post.media_type == "reel"
         fields = {"caption": post.description or ""}
         if is_reel:
-            fields.update(media_type="REELS", video_url=post.media_urls[0])
+            fields.update(
+                media_type="REELS",
+                video_url=await prepare_instagram_video(post.media_urls[0], self._transport),
+            )
         else:
-            fields["image_url"] = post.media_urls[0]
+            fields["image_url"] = await prepare_instagram_image(post.media_urls[0], self._transport)
         async with make_client(60.0, self._transport) as client:
             container = await graph_call(client, "POST", f"{ig}/media", token=token, data=fields)
             creation_id = container.get("id")

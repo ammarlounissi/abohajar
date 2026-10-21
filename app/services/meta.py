@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _build_payload(product: models.Product) -> dict:
-    return {
+    payload = {
         "retailer_id": product.sku,
         "name": product.title,
         "description": product.description or product.title,
@@ -26,6 +26,18 @@ def _build_payload(product: models.Product) -> dict:
         "image_url": product.primary_media_url,
         "brand": product.brand or "Hojrat Bladi",
     }
+    size = (product.sizes or "").strip()
+    if size:
+        payload["size"] = size
+
+    tags = [
+        tag.strip()
+        for tag in (product.tags or [])
+        if isinstance(tag, str) and tag.strip()
+    ]
+    for index, tag in enumerate(tags[:5]):
+        payload[f"custom_label_{index}"] = tag
+    return payload
 
 
 def _mark_failed(db: Session, product: models.Product, message: str) -> None:

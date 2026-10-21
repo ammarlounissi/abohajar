@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text,
+    Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -134,13 +134,14 @@ class SocialChannel(Base):
 class Product(Base):
     """المنتجات، متوافقة مع Meta Commerce Graph API"""
     __tablename__ = "products"
+    __table_args__ = (Index("ix_products_category_code", "title"),)
 
     id = Column(Integer, primary_key=True, index=True)
 
     sku = Column(String(50), unique=True, index=True, nullable=False)  # retailer_id
-    category_code = Column(String(20), nullable=False, index=True)
+    category_code = Column("title", String(20), nullable=False)
     tags = Column(JSON, nullable=False, default=list)
-    title = Column(String(255), nullable=False)
+    title = Column("category_code", String(255), nullable=False)
     commercial_name = Column(String(255), nullable=True)
     sizes = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)

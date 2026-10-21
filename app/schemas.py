@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import List, Literal, Optional
 
@@ -249,6 +250,56 @@ class PostUpdate(BaseModel):
     published_at: Optional[datetime] = None
     scheduled_at: Optional[datetime] = None
     sku: Optional[str] = Field(default=None, max_length=50)
+
+
+class PreparedPostsRequest(BaseModel):
+    factory_id: int = Field(gt=0)
+    channel_ids: List[int] = Field(min_length=1)
+
+    @field_validator("channel_ids")
+    @classmethod
+    def validate_channel_ids(cls, values):
+        if any(channel_id <= 0 for channel_id in values):
+            raise ValueError("معرّف القناة يجب أن يكون موجباً")
+        return list(dict.fromkeys(values))
+
+
+class PreparedPostsBySkuRequest(PreparedPostsRequest):
+    skus: List[str] = Field(min_length=1)
+
+    @field_validator("skus", mode="before")
+    @classmethod
+    def normalize_skus(cls, values):
+        return [value.strip().upper() if isinstance(value, str) else value for value in values]
+
+    @field_validator("skus")
+    @classmethod
+    def validate_skus(cls, values):
+        if any(not isinstance(sku, str) or not re.fullmatch(SKU_PATTERN, sku) for sku in values):
+            raise ValueError("رمز SKU غير صالح")
+        return list(dict.fromkeys(values))
+
+
+class PreparedPostsByCategoryRequest(PreparedPostsRequest):
+    category_codes: List[str] = Field(min_length=1)
+
+    @field_validator("category_codes", mode="before")
+    @classmethod
+    def normalize_category_codes(cls, values):
+        return [value.strip().upper() if isinstance(value, str) else value for value in values]
+
+    @field_validator("category_codes")
+    @classmethod
+    def validate_category_codes(cls, values):
+        if any(not isinstance(code, str) or not re.fullmatch(r"[A-Z0-9_-]{1,20}", code) for code in values):
+            raise ValueError("رمز التصنيف غير صالح")
+        return list(dict.fromkeys(values))
+
+
+class PreparedPostsResponse(BaseModel):
+    status: str = "success"
+    count: int
+    post_ids: List[int]
 
 
 class PostDeliveryResponse(BaseModel):

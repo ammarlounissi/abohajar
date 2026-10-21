@@ -7,6 +7,7 @@ from app import models, schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import post_publisher
+from app.services.product_posts import create_ready_posts
 
 router = APIRouter(
     prefix="/api/posts",
@@ -54,6 +55,37 @@ def get_unpublished_posts(
 ):
     """غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة)."""
     return post_publisher.list_unpublished(db, limit, offset)
+
+
+def _prepared_posts_response(posts):
+    return {"status": "success", "count": len(posts), "post_ids": [post.id for post in posts]}
+
+
+@router.post("/prepare/by-sku", response_model=schemas.PreparedPostsResponse,
+             status_code=status.HTTP_201_CREATED)
+def prepare_posts_by_sku(request: schemas.PreparedPostsBySkuRequest, db: Session = Depends(get_db)):
+    posts = create_ready_posts(
+        db, request.factory_id, request.channel_ids, skus=request.skus,
+    )
+    return _prepared_posts_response(posts)
+
+
+@router.post("/prepare/all", response_model=schemas.PreparedPostsResponse,
+             status_code=status.HTTP_201_CREATED)
+def prepare_posts_for_all_products(request: schemas.PreparedPostsRequest, db: Session = Depends(get_db)):
+    posts = create_ready_posts(db, request.factory_id, request.channel_ids)
+    return _prepared_posts_response(posts)
+
+
+@router.post("/prepare/by-category", response_model=schemas.PreparedPostsResponse,
+             status_code=status.HTTP_201_CREATED)
+def prepare_posts_by_category(
+    request: schemas.PreparedPostsByCategoryRequest, db: Session = Depends(get_db),
+):
+    posts = create_ready_posts(
+        db, request.factory_id, request.channel_ids, category_codes=request.category_codes,
+    )
+    return _prepared_posts_response(posts)
 
 
 @router.post("/{post_id}/publish", response_model=schemas.PostResponse, status_code=status.HTTP_202_ACCEPTED)

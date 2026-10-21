@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app import models
 from app.core.database import Base, get_db
 from app.core.security import require_admin
-from app.models import PostStatus
+from app.models import PostApproval, PostStatus
 from app.routers import posts as posts_router
 from app.services import errors, post_publisher
 
@@ -64,6 +64,17 @@ class RouterCase(unittest.TestCase):
                 db.add(models.PostDelivery(post_id=post.id, channel_id=channel_id, status="pending", attempts=0))
             db.commit()
             return post.id
+
+    def add_product(self, sku, category_code, factory_id=1):
+        with self.Session() as db:
+            product = models.Product(
+                sku=sku, category_code=category_code, title=f"منتج {sku}",
+                commercial_name=f"اسم {sku}", tags=["حجر"], sizes="20x30",
+                price=100, primary_media_url=f"https://hadjretbladi.com/{sku}/1.jpg",
+                factory_id=factory_id,
+            )
+            db.add(product)
+            db.commit()
 
 
 class ListRoutesTests(RouterCase):
@@ -135,6 +146,54 @@ class ChannelSelectionTests(RouterCase):
     def test_patch_channels_of_published_post_conflicts(self):
         post_id = self.add_post(PostStatus.PUBLISHED, channels=(1,))
         self.assertEqual(self.client.patch(f"/api/posts/{post_id}", json={"channel_ids": [2]}).status_code, 409)
+
+
+class PreparedPostRoutesTests(RouterCase):
+    def test_prepare_by_sku_creates_approved_deliveries_and_platform_captions(self):
+        self.add_product("B001", "B")
+        response = self.client.post("/api/posts/prepare/by-sku", json={
+            "factory_id": 1, "channel_ids": [2, 1], "skus": ["b001"],
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["count"], 1)
+        with self.Session() as db:
+            post = db.get(models.Post, response.json()["post_ids"][0])
+            self.assertEqual(post.status, PostStatus.APPROVED)
+            self.assertEqual(post.approval, PostApproval.APPROVED)
+            self.assertIsNotNone(post.approved_at)
+            self.assertEqual(post.sku, "B001")
+            self.assertEqual([delivery.channel_id for delivery in post.deliveries], [2, 1])
+            captions = {delivery.platform: delivery.caption for delivery in post.deliveries}
+            self.assertIn("رمز المنتج: B001", captions["instagram"])
+            self.assertIn("https://wa.me/", captions["facebook"])
+            self.assertEqual(post.media_urls, ["https://hadjretbladi.com/B001/1.jpg"])
+
+    def test_prepare_all_products(self):
+        self.add_product("B001", "B")
+        self.add_product("PTK002", "PTK")
+        response = self.client.post("/api/posts/prepare/all", json={
+            "factory_id": 1, "channel_ids": [1],
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["count"], 2)
+        with self.Session() as db:
+            posts = db.query(models.Post).order_by(models.Post.id).all()
+            self.assertEqual({post.sku for post in posts}, {"B001", "PTK002"})
+            self.assertTrue(all(post.status == PostStatus.APPROVED for post in posts))
+
+    def test_prepare_by_multiple_categories_and_missing_sku(self):
+        self.add_product("B001", "B")
+        self.add_product("PTK002", "PTK")
+        self.add_product("C003", "C")
+        response = self.client.post("/api/posts/prepare/by-category", json={
+            "factory_id": 1, "channel_ids": [1], "category_codes": ["b", "PTK"],
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["count"], 2)
+        missing = self.client.post("/api/posts/prepare/by-sku", json={
+            "factory_id": 1, "channel_ids": [1], "skus": ["B999"],
+        })
+        self.assertEqual(missing.status_code, 404)
 
 
 class PublishNowTests(RouterCase):
