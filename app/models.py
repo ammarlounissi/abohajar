@@ -134,14 +134,14 @@ class SocialChannel(Base):
 class Product(Base):
     """المنتجات، متوافقة مع Meta Commerce Graph API"""
     __tablename__ = "products"
-    __table_args__ = (Index("ix_products_category_code", "title"),)
+    __table_args__ = (Index("ix_products_category_code", "category_code"),)
 
     id = Column(Integer, primary_key=True, index=True)
 
     sku = Column(String(50), unique=True, index=True, nullable=False)  # retailer_id
-    category_code = Column("title", String(20), nullable=False)
+    category_code = Column(String(20), nullable=False)
     tags = Column(JSON, nullable=False, default=list)
-    title = Column("category_code", String(255), nullable=False)
+    title = Column(String(255), nullable=False)
     commercial_name = Column(String(255), nullable=True)
     sizes = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
