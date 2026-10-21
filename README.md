@@ -271,7 +271,7 @@ python -m scripts.seed_posts --clear --apply                  # حذف منشو�
 - عند النشر على إنستغرام، يجلب التطبيق الصورة ويحوّلها إلى JPEG ضمن مجال الأبعاد المدعوم (نسبة 4:5 إلى 1.91:1، وعرض 320–1440 بكسل). تُقص الصورة من الوسط عند الحاجة، وتُحفظ نسخة مشتقة مستقلة عن الأصل وتُخدم من `/api/media/instagram/{sha256}.jpg` عبر واجهة API.
 - عند نشر Reel على إنستغرام، يُفحص الفيديو ثم يُحوّل إلى إطار عمودي 1080×1920 بقصّ مركزي وترميز H.264/AAC، وتُخدم النسخة المشتقة من `/api/media/instagram/{sha256}.mp4`. يتطلب ذلك تثبيت `ffmpeg` و`ffprobe` وإتاحتهما في `PATH` على خادم التطبيق (على Debian/Ubuntu: `sudo apt-get install ffmpeg`).
 - لملء `category_code` من الحروف الأولى في SKU (مثل `B001` ← `B` و`PTK012` ← `PTK`)، شغّل `python -m scripts.update_category_codes` لمعاينة التغييرات، ثم `python -m scripts.update_category_codes --apply` لحفظها. تُتخطى رموز SKU التي لا تطابق صيغة حروف كبيرة متبوعة بأرقام.
-- لتبديل الاسمين الفيزيائيين لعمودي قاعدة البيانات `title` و`category_code` مع إبقاء البيانات وسلوك التطبيق كما هما، خذ نسخة احتياطية ثم شغّل `alembic upgrade head`. الترحيل يعيد ربط حقول ORM بالأعمدة الجديدة؛ لا تستخدم سكريبت تحديث الفئات لهذا الغرض.
+- نوقش تبديل الاسمين الفيزيائيين لعمودي قاعدة البيانات `title` و`category_code`، لكن لا يوجد ترحيل Alembic لهذا التبديل في الحالة الحالية للمستودع؛ لا تشغّل `alembic upgrade head` لهذا الغرض.
 - إضافة قناة جديدة أو ميزة جديدة: انظر `ARCHITECTURE.md`.
 
 
@@ -294,3 +294,85 @@ python -m scripts.seed_product_catalog --rewrite-tag-encoding
 ضع `product_catalog_seed.xlsx` في جذر المشروع؛ هذا هو مصدر البيانات الافتراضي. ويمكن تمرير ملف آخر عبر `--xlsx /path/to/file.xlsx`. يطابق السكربت الصفوف حسب SKU ويحدّث المنتجات الموجودة فقط، ولا ينشئ منتجات جديدة. يستورد الاسم التجاري والمقاس والوصف والوسوم؛ والحقول الفارغة في Excel لا تمسح القيم الموجودة في قاعدة البيانات. الوسوم تُقرأ من عمود «الوسوم»، أو تُشتق من أعمدة الصنف والنوع واللون والملمس والمقاس والاستخدام والسطح عند غيابه. لا يتغيّر التصنيف بالكود. كُوّن محرك قاعدة البيانات أيضاً ليكتب المحارف العربية داخل قيم JSON بصيغتها المقروءة؛ خيار `--rewrite-tag-encoding` يعيد حفظ الوسوم الموجودة دون تغيير قيمها، كي ينعكس ذلك على التخزين القديم.
 
 عند المزامنة مع Meta يبقى `title` هو اسم المنتج (`name`)، ويُرسل `sizes` إلى `size` وأول خمسة عناصر من `tags` إلى `custom_label_0` حتى `custom_label_4`. لا يُرسل `category_code` إلى Meta.
+
+## ملخص تنفيذ جلسة 21 أكتوبر 2026
+
+### تجهيز صور وفيديوهات Instagram
+
+- قبل نشر صورة، ينزّلها التطبيق من رابطها، يقرأ اتجاه EXIF، يقصّ من الوسط إذا كانت نسبة الأبعاد خارج المجال `4:5` إلى `1.91:1`، ويضبط العرض إلى `320–1440` بكسل. الناتج JPEG حتى لو كانت الصورة الأصلية PNG أو WebP. لا تتغير الصورة الأصلية.
+- قبل نشر Reel، يفحص التطبيق مسار الفيديو بواسطة `ffprobe`. إذا لم تكن أبعاده `1080×1920`، ينشئ نسخة MP4 عمودية بهذه الأبعاد بقص مركزي وترميز H.264/AAC. إذا كانت الأبعاد مطابقة، يستخدم رابط المصدر كما هو.
+- تحفظ النسخ المعالجة في `MEDIA_ROOT/.instagram` باسم مبني على SHA-256، وتُقدّم عبر `GET /api/media/instagram/{sha256}.jpg` أو `GET /api/media/instagram/{sha256}.mp4`. يجب أن يكون `BASE_URL` عامًا ويمكن لميتا الوصول إليه، وأن يمرّر الخادم الوكيل مسارات `/api/` إلى التطبيق.
+- يتطلب تحويل الفيديو وجود `ffmpeg` و`ffprobe` في `PATH` على خادم التطبيق. في Debian/Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install ffmpeg
+ffmpeg -version
+ffprobe -version
+```
+
+في بيئة التطوير لهذه الجلسة لم تتوفر صلاحية تثبيت FFmpeg؛ لذلك اختُبرت عملية التحويل بمضاعفات اختبارية، ولم يُجر اختبار ترميز فعلي لفيديو.
+
+لتثبيت اعتماد معالجة الصور في بيئة المشروع:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### إنشاء منشورات المنتجات الجاهزة للمؤقت
+
+المسارات الإدارية تتطلب ترويسة `X-API-Key`. تُحفظ المنشورات المنشأة بحالة موافَق عليها، ويضيف لكل قناة تسليمًا بحالة انتظار، ليتمكن المؤقت من التقاطها دون موافقة يدوية:
+
+```bash
+# عدة منتجات حسب SKU وعدة قنوات محلية
+curl -X POST "$BASE_URL/api/posts/prepare/by-sku" \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"factory_id":1,"channel_ids":[1,2],"skus":["B001","PTK012"]}'
+
+# جميع منتجات المصنع
+curl -X POST "$BASE_URL/api/posts/prepare/all" \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"factory_id":1,"channel_ids":[1,2]}'
+
+# المنتجات التابعة إلى عدة تصنيفات
+curl -X POST "$BASE_URL/api/posts/prepare/by-category" \
+  -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"factory_id":1,"channel_ids":[1,2],"category_codes":["B","PTK"]}'
+```
+
+`channel_ids` هي معرّفات الصفحات/القنوات المحلية في جدول `social_channels`، وليست معرّفات الصفحات الأصلية لدى المنصة. ترجع الاستجابة عدد المنشورات ومعرّفاتها. مسار الفئة يختار المنتجات المسجلة فعلًا برمز الفئة؛ شغّل سكريبت التصنيف أدناه أولًا إذا كانت قيم `category_code` لم تُملأ.
+
+### ملء تصنيف المنتجات من SKU
+
+يستخرج السكريبت الحروف الكبيرة المتتابعة في بداية SKU المطابق لصيغة حروف كبيرة ثم أرقام: `B001` ← `B` و`PTK012` ← `PTK`. يتخطى SKU غير المطابق، ويعرض المعاينة دون حفظ افتراضيًا:
+
+```bash
+python -m scripts.update_category_codes
+python -m scripts.update_category_codes --apply
+```
+
+نفّذ المعاينة أولًا وراجع القيم قبل إضافة `--apply`.
+
+### مزامنة بيانات المنتج مع Meta
+
+- يبقى `title` هو قيمة حقل Meta `name`؛ لا يستبدله `commercial_name`.
+- يرسل `sizes` إلى `size` عند وجود قيمة.
+- يرسل أول خمسة وسوم نصية غير فارغة إلى `custom_label_0` حتى `custom_label_4`.
+- لا يرسل `category_code` إلى Meta.
+
+### فحوصات التطوير التي نُفّذت
+
+```bash
+python -m unittest tests.test_social_adapters -q
+python -m unittest tests.test_meta -q
+python -m unittest tests.test_update_category_codes -q
+python -m unittest tests.test_product_column_name_swap_migration tests.test_update_category_codes tests.test_meta -v
+python -m unittest discover -s tests -q
+git diff --check
+```
+
+اجتازت مجموعة الاختبارات الكاملة `187` اختبارًا في آخر تشغيل. يتضمن ذلك اختبارات مسارات المنشورات، إعداد صور Instagram، تدفق الفيديو وإتاحة النسخ المشتقة، حمولة Meta، وسكريبت تصنيف المنتجات.
+
+### ملاحظة حول أسماء أعمدة قاعدة البيانات
+
+نوقش تبديل الاسمين الفيزيائيين للعمودين `title` و`category_code` مع الإبقاء على البيانات. لا يوجد في الحالة الحالية للمستودع ترحيل Alembic يبدّل اسمي هذين العمودين؛ النموذج الحالي ما زال يستخدم أسماء الأعمدة المعتادة. لا تنفّذ ترحيلًا لهذا الغرض قبل إضافته ومراجعته.
