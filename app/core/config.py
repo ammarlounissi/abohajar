@@ -49,7 +49,11 @@ class Settings:
     # النشر على فيسبوك وإنستغرام (كل منصة اختيارية: تفشل عمليتها بسبب واضح إن نقص معرّفها)
     META_PAGE_ID = _get("META_PAGE_ID")            # معرّف صفحة فيسبوك
     META_IG_USER_ID = _get("META_IG_USER_ID")      # معرّف حساب إنستغرام (رقم مختلف عن الصفحة)
-    PUBLISH_DAILY_LIMIT = _get_int("PUBLISH_DAILY_LIMIT") or 50   # أقصى منشورات تُحجز كل 24 ساعة (حد إنستغرام ~100)
+    # السقف اليومي لكل قناة (صفحة/حساب) على حدة، لا للنظام كله. PUBLISH_DAILY_LIMIT احتياطي لأي منصة بلا سقف خاص
+    PUBLISH_DAILY_LIMIT = _get_int("PUBLISH_DAILY_LIMIT") or 50
+    PUBLISH_DAILY_LIMIT_INSTAGRAM = _get_int("PUBLISH_DAILY_LIMIT_INSTAGRAM") or 50   # حد إنستغرام ~100 لكل حساب
+    PUBLISH_DAILY_LIMIT_FACEBOOK = _get_int("PUBLISH_DAILY_LIMIT_FACEBOOK") or 200
+    PUBLISH_PER_RUN = _get_int("PUBLISH_PER_RUN") or 10           # أقصى منشورات يتناولها كل تشغيل للمؤقت
     PUBLISH_STALE_MINUTES = _get_int("PUBLISH_STALE_MINUTES") or 30  # بعدها يُعدّ publishing عالقاً
 
     # الأمان

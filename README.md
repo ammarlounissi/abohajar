@@ -187,7 +187,7 @@ python3 test_api.py http://127.0.0.1:8000 --write --yes --include-sync
 
 ## النشر التلقائي (فيسبوك وإنستغرام)
 
-سكريبت يومي ينشر منشوراً واحداً جاهزاً من جدول `posts`. الكود: `app/services/social/` (محوّل لكل منصة) و`app/services/post_publisher.py` (الحجز والحالات والتقارير) و`app/jobs/` (نقطتا الدخول).
+سكريبت يعمل كل دقيقة وينشر في كل تشغيل حتى `PUBLISH_PER_RUN` (10) منشوراً جاهزاً حان موعده. السقف اليومي لكل قناة على حدة (`PUBLISH_DAILY_LIMIT_INSTAGRAM` و`PUBLISH_DAILY_LIMIT_FACEBOOK`) ويُحسب من النشر الفعلي في آخر 24 ساعة، والمنشور الذي بلغت قناته سقفها ينتظر دون تعطيل غيره. المصدر: جدول `posts`. الكود: `app/services/social/` (محوّل لكل منصة) و`app/services/post_publisher.py` (الحجز والحالات والتقارير) و`app/jobs/` (نقطتا الدخول).
 
 ```bash
 # 1) نسخة احتياطية من القاعدة بختم زمني ثم الترحيل
@@ -260,7 +260,7 @@ python -m scripts.seed_posts --clear --apply                  # حذف منشو�
 - **إعادة محاولة الفاشل:** `python -m app.jobs.posts approve <id>` فتُنشر القناة الفاشلة وحدها (الناجحة محفوظة في `post_deliveries`).
 - **العالقون:** منشور بقي `publishing` أكثر من `PUBLISH_STALE_MINUTES` لا يُعاد نشره تلقائياً (ربما نُشر)؛ يُكتب له تقرير في `publish_reports` ويظهر في مخرجات التشغيل.
 - **التقارير:** `publish_reports.kind` = `token` (كود 190/463/467) أو `media` أو `limit` أو `network` أو `unknown`، و`sent_at` فارغ حتى تُبنى قناة الإرسال.
-- **الجدولة:** ملفات systemd في `deploy/systemd/` (07:00 UTC = 08:00 الجزائر)؛ انظر التفعيل في أعلى كل ملف ووثيقة المرحلة.
+- **الجدولة:** ملفات systemd في `deploy/systemd/` (المؤقت يعمل كل دقيقة)؛ انظر التفعيل في أعلى كل ملف ووثيقة المرحلة.
 
 ---
 

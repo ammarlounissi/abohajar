@@ -1,6 +1,6 @@
-"""نقطة دخول النشر التلقائي (يشغّلها systemd timer كل يوم 08:00 بتوقيت الجزائر):
+"""نقطة دخول النشر التلقائي (يشغّلها systemd timer كل دقيقة؛ ينشر حتى PUBLISH_PER_RUN منشوراً حان موعدها في كل تشغيل، وإلا ينتهي بصمت):
 
-    python -m app.jobs.publish_due              # نشر فعلي (منشور واحد جاهز وحان موعده)
+    python -m app.jobs.publish_due              # نشر فعلي (حتى PUBLISH_PER_RUN منشوراً جاهزاً وحان موعده)
     python -m app.jobs.publish_due --dry-run    # يطبع ما كان سينشره ونتيجة التحقق المسبق، بلا نشر ولا حجز
 
 رمز الخروج: 0 سليم، 1 فشل نشر على منصة أو أكثر (يظهر في systemctl --failed وjournalctl)، 2 خلل إعداد.
@@ -23,7 +23,7 @@ def format_summary(summary: post_publisher.RunSummary) -> str:
     for post_id in summary.stale_post_ids:
         lines.append(f"STALE post={post_id}: عالق في publishing، لا يُعاد نشره تلقائياً (راجعه يدوياً)")
     if summary.daily_limit_reached:
-        lines.append(f"LIMIT: بلغ السقف اليومي ({settings.PUBLISH_DAILY_LIMIT})")
+        lines.append(f"LIMIT: بلغت السقف اليومي، تأجلت منشوراتها: {', '.join(summary.limited_channels)}")
     if not summary.outcomes and not summary.daily_limit_reached:
         lines.append("لا منشور جاهز الآن")
     for outcome in summary.outcomes:

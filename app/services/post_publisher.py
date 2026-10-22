@@ -26,6 +26,7 @@ from app.services.social.base import Publisher, PublishError, PublishResult
 logger = logging.getLogger(__name__)
 
 STALE_PREFIX = "stale_publishing"
+CANDIDATE_SCAN = 200      # أقصى عدد منشورات جاهزة يفحصها التشغيل الواحد بحثاً عن قنوات غير ممتلئة
 APPROVABLE = (PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.FAILED)   # FAILED: لإعادة المحاولة
 MANUALLY_PUBLISHABLE = APPROVABLE + (PostStatus.APPROVED,)
 UNPUBLISHED = (PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.APPROVED, PostStatus.PUBLISHING, PostStatus.FAILED)
@@ -44,8 +45,12 @@ class PostOutcome:
 class RunSummary:
     stale_post_ids: List[int] = field(default_factory=list)   # عالقون في publishing (للمراجعة اليدوية)
     outcomes: List[PostOutcome] = field(default_factory=list)
-    daily_limit_reached: bool = False
+    limited_channels: List[str] = field(default_factory=list)   # قنوات بلغت سقفها اليومي فتأجل منشوراتها
     dry_run: bool = False
+
+    @property
+    def daily_limit_reached(self) -> bool:
+        return bool(self.limited_channels)
 
     @property
     def failures(self) -> int:
@@ -202,13 +207,21 @@ def _next_due_filter(now: datetime):
     )
 
 
-def _next_due_id_query(now: datetime):
+def _due_ordered_query(now: datetime):
     return (
         select(models.Post.id)
         .where(*_next_due_filter(now))
         .order_by(func.coalesce(models.Post.scheduled_at, models.Post.approved_at), models.Post.id)
-        .limit(1)
     )
+
+
+def _next_due_id_query(now: datetime):
+    return _due_ordered_query(now).limit(1)
+
+
+def due_post_ids(db: Session, now: datetime, limit: int = CANDIDATE_SCAN) -> List[int]:
+    """معرّفات المنشورات التي حان موعدها مرتبةً بالأقدم أولاً (دون حجزها)."""
+    return list(db.scalars(_due_ordered_query(now).limit(limit)))
 
 
 def peek_next_due(db: Session, now: datetime) -> Optional[models.Post]:
@@ -236,8 +249,37 @@ def claim_next(db: Session, now: datetime) -> Optional[models.Post]:
     return db.get(models.Post, row[0])
 
 
-def claimed_since(db: Session, since: datetime) -> int:
-    return db.scalar(select(func.count()).select_from(models.Post).where(models.Post.claimed_at >= since)) or 0
+def claim_due(db: Session, post_id: int, now: datetime) -> Optional[models.Post]:
+    """حجز ذري لمنشور بعينه بشرط أنه ما زال approved وحان موعده (None إن سبقه تشغيل آخر أو لم يعد جاهزاً)."""
+    row = db.execute(
+        update(models.Post)
+        .where(models.Post.id == post_id, *_next_due_filter(now))
+        .values(status=PostStatus.PUBLISHING, claimed_at=now)
+        .returning(models.Post.id)
+        .execution_options(synchronize_session=False)
+    ).first()
+    db.commit()
+    if not row:
+        return None
+    db.expire_all()
+    return db.get(models.Post, post_id)
+
+
+def channel_daily_limit(platform: str) -> int:
+    """سقف القناة في 24 ساعة: PUBLISH_DAILY_LIMIT_<PLATFORM> إن وُجد، وإلا PUBLISH_DAILY_LIMIT."""
+    specific = getattr(settings, f"PUBLISH_DAILY_LIMIT_{platform.upper()}", None)
+    return specific or settings.PUBLISH_DAILY_LIMIT
+
+
+def channel_usage(db: Session, since: datetime) -> Dict[int, int]:
+    """عدد ما نُشر فعلاً على كل قناة منذ since (من post_deliveries)."""
+    rows = db.execute(
+        select(models.PostDelivery.channel_id, func.count())
+        .where(models.PostDelivery.status == DeliveryStatus.PUBLISHED.value,
+               models.PostDelivery.published_at >= since)
+        .group_by(models.PostDelivery.channel_id)
+    )
+    return {channel_id: n for channel_id, n in rows}
 
 
 # ---------------------------------------------------------------- العالقون
@@ -358,11 +400,13 @@ async def publish_due(
     publishers: Dict[str, Publisher],
     dry_run: bool = False,
     now: Optional[datetime] = None,
-    per_run: int = 1,
+    per_run: Optional[int] = None,
 ) -> RunSummary:
-    """تشغيل واحد: يُبلَّغ عن العالقين، ثم يُنشر منشور واحد (per_run) إن وُجد جاهز وحان موعده.
-    السقف اليومي (PUBLISH_DAILY_LIMIT) يُحسب من المنشورات المحجوزة في آخر 24 ساعة."""
+    """تشغيل واحد: يُبلَّغ عن العالقين، ثم يُنشر حتى per_run (الافتراضي PUBLISH_PER_RUN) منشوراً حان موعده.
+    السقف اليومي لكل قناة على حدة (channel_daily_limit) ويُحسب من النشر الفعلي في آخر 24 ساعة؛ المنشور الذي
+    بلغت إحدى قنواته سقفها يُترك approved لتشغيل لاحق ولا يعطّل منشورات القنوات الأخرى."""
     now = now or datetime.utcnow()
+    per_run = settings.PUBLISH_PER_RUN if per_run is None else per_run
     summary = RunSummary(dry_run=dry_run)
     summary.stale_post_ids = [] if dry_run else report_stale(db, now)
     if dry_run:
@@ -370,15 +414,26 @@ async def publish_due(
             p.id for p in db.scalars(select(models.Post).where(models.Post.status == PostStatus.PUBLISHING))
         ]
 
-    budget = settings.PUBLISH_DAILY_LIMIT - claimed_since(db, now - timedelta(hours=24))
-    for _ in range(max(0, per_run)):
-        if budget <= 0:
-            summary.daily_limit_reached = True
+    usage = channel_usage(db, now - timedelta(hours=24))
+    remaining: Dict[int, int] = {}
+
+    def left(channel: models.SocialChannel) -> int:
+        if channel.id not in remaining:
+            remaining[channel.id] = channel_daily_limit(channel.platform) - usage.get(channel.id, 0)
+        return remaining[channel.id]
+
+    for post_id in due_post_ids(db, now):
+        if len(summary.outcomes) >= max(0, per_run):
             break
+        post = db.get(models.Post, post_id)
+        pending = [d for d in post.deliveries if d.status != DeliveryStatus.PUBLISHED.value]
+        full = [d.channel.label for d in pending if left(d.channel) <= 0]
+        if full:
+            summary.limited_channels.extend(label for label in full if label not in summary.limited_channels)
+            continue
+        for delivery in pending:
+            remaining[delivery.channel_id] -= 1
         if dry_run:
-            post = peek_next_due(db, now)
-            if not post:
-                break
             results = []
             for delivery in post.deliveries:
                 channel = delivery.channel
@@ -390,10 +445,9 @@ async def publish_due(
                     kind=problem.kind if problem else None, channel_id=channel.id, channel_label=channel.label,
                 ))
             summary.outcomes.append(PostOutcome(post.id, "dry-run", [_label(d) for d in post.deliveries], results))
-            break      # لا حجز في التجربة، فلن يتغير المنشور التالي
-        post = claim_next(db, now)
-        if not post:
-            break
-        budget -= 1
-        summary.outcomes.append(await publish_post(db, post, publishers, now))
+            continue
+        claimed = claim_due(db, post_id, now)
+        if not claimed:
+            continue      # سبقه تشغيل آخر
+        summary.outcomes.append(await publish_post(db, claimed, publishers, now))
     return summary

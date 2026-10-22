@@ -123,13 +123,24 @@ class PublishFlowTests(Base_):
         self.assertEqual(summary.failures, 0)
         self.assertEqual(self.db.scalars(select(models.PublishReport)).all(), [])
 
-    def test_one_post_per_run(self):
-        self.make_post()
-        self.make_post()
-        summary = self.go({"facebook": FakePublisher("facebook"), "instagram": FakePublisher("instagram")})
-        self.assertEqual(len(summary.outcomes), 1)
+    def test_all_due_posts_published_up_to_per_run(self):
+        for _ in range(3):
+            self.make_post()
+        pubs = {"facebook": FakePublisher("facebook"), "instagram": FakePublisher("instagram")}
+        summary = self.go(pubs, per_run=2)
+        self.assertEqual(len(summary.outcomes), 2)
         left = self.db.scalars(select(models.Post).where(models.Post.status == PostStatus.APPROVED)).all()
         self.assertEqual(len(left), 1)
+        self.assertEqual(len(self.go(pubs, per_run=2).outcomes), 1)     # التشغيل التالي يكمل الباقي
+
+    def test_future_posts_left_alone_while_due_ones_publish(self):
+        due = self.make_post(scheduled_at=NOW - timedelta(minutes=1))
+        later = self.make_post(scheduled_at=NOW + timedelta(hours=1))
+        self.go({"facebook": FakePublisher("facebook"), "instagram": FakePublisher("instagram")})
+        self.db.refresh(due)
+        self.db.refresh(later)
+        self.assertEqual(due.status, PostStatus.PUBLISHED)
+        self.assertEqual(later.status, PostStatus.APPROVED)
 
     def test_partial_failure_then_retry_only_failed_platform(self):
         post = self.make_post()
@@ -194,13 +205,57 @@ class PublishFlowTests(Base_):
 
 
 class LimitsAndDryRunTests(Base_):
-    def test_daily_limit(self):
-        self.make_post()
-        with mock.patch.object(settings, "PUBLISH_DAILY_LIMIT", 1):
-            self.make_post(status=PostStatus.PUBLISHED, claimed_at=NOW - timedelta(hours=2))
-            summary = self.go({"facebook": FakePublisher("facebook")})
+    def _publish_on(self, platform, hours_ago=2, status="published"):
+        """نشر سابق على قناة المنصة: يستهلك من سقفها."""
+        post = self.make_post(status=PostStatus.PUBLISHED, platforms=platform)
+        delivery = post.deliveries[0]
+        delivery.status, delivery.published_at = status, NOW - timedelta(hours=hours_ago)
+        self.db.commit()
+
+    def test_channel_limit_defers_only_that_channel(self):
+        self._publish_on("facebook")
+        blocked = self.make_post(platforms="facebook")
+        free = self.make_post(platforms="instagram")
+        with mock.patch.object(settings, "PUBLISH_DAILY_LIMIT_FACEBOOK", 1):
+            summary = self.go({"facebook": FakePublisher("facebook"), "instagram": FakePublisher("instagram")})
+        self.db.refresh(blocked)
+        self.db.refresh(free)
+        self.assertEqual(blocked.status, PostStatus.APPROVED)       # ينتظر ولا يُفقد
+        self.assertEqual(free.status, PostStatus.PUBLISHED)         # لم يتعطل بسبب سقف فيسبوك
         self.assertTrue(summary.daily_limit_reached)
-        self.assertEqual(summary.outcomes, [])
+        self.assertEqual(summary.limited_channels, ["facebook:111111"])
+
+    def test_limit_counts_published_within_24h_only(self):
+        self._publish_on("facebook", hours_ago=30)
+        post = self.make_post(platforms="facebook")
+        with mock.patch.object(settings, "PUBLISH_DAILY_LIMIT_FACEBOOK", 1):
+            self.go({"facebook": FakePublisher("facebook")})
+        self.db.refresh(post)
+        self.assertEqual(post.status, PostStatus.PUBLISHED)
+
+    def test_limit_applies_within_one_run(self):
+        first = self.make_post(platforms="facebook", approved_at=NOW - timedelta(hours=3))
+        second = self.make_post(platforms="facebook", approved_at=NOW - timedelta(hours=2))
+        with mock.patch.object(settings, "PUBLISH_DAILY_LIMIT_FACEBOOK", 1):
+            summary = self.go({"facebook": FakePublisher("facebook")})
+        self.db.refresh(first)
+        self.db.refresh(second)
+        self.assertEqual((first.status, second.status), (PostStatus.PUBLISHED, PostStatus.APPROVED))
+        self.assertEqual(len(summary.outcomes), 1)
+
+    def test_post_waits_if_any_of_its_channels_is_full(self):
+        self._publish_on("instagram")
+        post = self.make_post(platforms="facebook,instagram")
+        fb = FakePublisher("facebook")
+        with mock.patch.object(settings, "PUBLISH_DAILY_LIMIT_INSTAGRAM", 1):
+            self.go({"facebook": fb, "instagram": FakePublisher("instagram")})
+        self.db.refresh(post)
+        self.assertEqual(post.status, PostStatus.APPROVED)
+        self.assertEqual(fb.calls, 0)       # لا نشر جزئي على القناة الحرة
+
+    def test_fallback_limit_for_platform_without_specific_limit(self):
+        self.assertEqual(post_publisher.channel_daily_limit("tiktok"), settings.PUBLISH_DAILY_LIMIT)
+        self.assertEqual(post_publisher.channel_daily_limit("facebook"), settings.PUBLISH_DAILY_LIMIT_FACEBOOK)
 
     def test_dry_run_changes_nothing(self):
         post = self.make_post(platforms="facebook")

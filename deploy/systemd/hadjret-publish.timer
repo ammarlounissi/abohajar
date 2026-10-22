@@ -1,10 +1,13 @@
 [Unit]
-Description=Daily publish at 08:00 Algeria time
+Description=Check for due social posts every minute
 
 [Timer]
-# 08:00 بتوقيت الجزائر = 07:00 UTC
-OnCalendar=*-*-* 07:00:00 UTC
-Persistent=true
+# كل دقيقة عند الثانية 0؛ الخدمة تبحث عن المنشورات التي حان موعدها (approved وscheduled_at <= الآن) وتنشرها
+OnCalendar=*-*-* *:*:00
+# دقة 1 ثانية (الافتراضي دقيقة كاملة قد تؤخر التشغيل)
+AccuracySec=1s
+# بلا تعويض للتشغيلات الفائتة أثناء توقف الجهاز: كل تشغيل يفحص كل ما حان موعده على أي حال
+Persistent=false
 
 [Install]
 WantedBy=timers.target
