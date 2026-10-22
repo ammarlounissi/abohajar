@@ -1,14 +1,17 @@
 """Create approved, timer-ready posts from catalog products."""
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.core.config import settings
 from app.models import DeliveryStatus, PostApproval, PostStatus
 from app.services.errors import InvalidInputError, NotFoundError
 from app.services.post_templates import build_caption
+from app.services.schedule_slots import generate_slots
 
 
 def create_ready_posts(
@@ -18,7 +21,12 @@ def create_ready_posts(
     *,
     skus: Optional[Sequence[str]] = None,
     category_codes: Optional[Sequence[str]] = None,
+    times: Optional[Sequence[time]] = None,
+    start_date: Optional[date] = None,
 ) -> List[models.Post]:
+    """times: ساعات النشر اليومية (بتوقيت settings.PUBLISH_TIMEZONE). تُوزَّع المنشورات عليها بالترتيب يوماً بعد يوم،
+    وتُتخطى المواعيد المحجوزة لمنشورات غير منشورة لنفس المصنع (فالدفعة الجديدة تلحق بآخر الطابور).
+    بلا times: لا موعد، فيلتقطها المؤقت فور إنشائها."""
     factory = db.get(models.Factory, factory_id)
     if not factory:
         raise NotFoundError("المصنع غير موجود")
@@ -51,8 +59,19 @@ def create_ready_posts(
             raise NotFoundError(f"منتجات غير موجودة لهذا المصنع: {', '.join(missing_skus)}")
 
     now = datetime.utcnow()
+    slots: List[Optional[datetime]] = [None] * len(products)
+    if times and products:
+        occupied = db.scalars(select(models.Post.scheduled_at).where(
+            models.Post.factory_id == factory_id,
+            models.Post.scheduled_at.is_not(None),
+            models.Post.status.in_((PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.APPROVED, PostStatus.PUBLISHING)),
+        ))
+        slots = generate_slots(
+            len(products), times, now_utc=now, tz=ZoneInfo(settings.PUBLISH_TIMEZONE),
+            start_date=start_date, occupied=set(occupied),
+        )
     posts = []
-    for product in products:
+    for product, slot in zip(products, slots):
         captions = {channel.id: build_caption(product, channel.platform) for channel in channels.values()}
         post = models.Post(
             factory_id=factory_id,
@@ -63,6 +82,7 @@ def create_ready_posts(
             status=PostStatus.APPROVED,
             approval=PostApproval.APPROVED,
             approved_at=now,
+            scheduled_at=slot,
         )
         post.deliveries = [
             models.PostDelivery(

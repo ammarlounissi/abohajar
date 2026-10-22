@@ -53,6 +53,7 @@ class Settings:
     PUBLISH_DAILY_LIMIT = _get_int("PUBLISH_DAILY_LIMIT") or 50
     PUBLISH_DAILY_LIMIT_INSTAGRAM = _get_int("PUBLISH_DAILY_LIMIT_INSTAGRAM") or 50   # حد إنستغرام ~100 لكل حساب
     PUBLISH_DAILY_LIMIT_FACEBOOK = _get_int("PUBLISH_DAILY_LIMIT_FACEBOOK") or 200
+    PUBLISH_TIMEZONE = _get("PUBLISH_TIMEZONE", "Africa/Algiers")   # توقيت أوقات النشر اليومية (times) في مسارات prepare
     PUBLISH_PER_RUN = _get_int("PUBLISH_PER_RUN") or 10           # أقصى منشورات يتناولها كل تشغيل للمؤقت
     PUBLISH_STALE_MINUTES = _get_int("PUBLISH_STALE_MINUTES") or 30  # بعدها يُعدّ publishing عالقاً
 

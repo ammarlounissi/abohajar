@@ -324,21 +324,23 @@ python -m pip install -r requirements.txt
 المسارات الإدارية تتطلب ترويسة `X-API-Key`. تُحفظ المنشورات المنشأة بحالة موافَق عليها، ويضيف لكل قناة تسليمًا بحالة انتظار، ليتمكن المؤقت من التقاطها دون موافقة يدوية:
 
 ```bash
-# عدة منتجات حسب SKU وعدة قنوات محلية
+# عدة منتجات حسب SKU وعدة قنوات محلية (times اختياري هنا: بدونه يُنشر فوراً)
 curl -X POST "$BASE_URL/api/posts/prepare/by-sku" \
   -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
   -d '{"factory_id":1,"channel_ids":[1,2],"skus":["B001","PTK012"]}'
 
-# جميع منتجات المصنع
+# جميع منتجات المصنع، موزَّعة على ساعات يومية (8 و14 و18 بتوقيت الجزائر)
 curl -X POST "$BASE_URL/api/posts/prepare/all" \
   -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
-  -d '{"factory_id":1,"channel_ids":[1,2]}'
+  -d '{"factory_id":1,"channel_ids":[1,2],"times":[8,14,18]}'
 
-# المنتجات التابعة إلى عدة تصنيفات
+# المنتجات التابعة إلى عدة تصنيفات (times إلزامي أيضاً)
 curl -X POST "$BASE_URL/api/posts/prepare/by-category" \
   -H "X-API-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
-  -d '{"factory_id":1,"channel_ids":[1,2],"category_codes":["B","PTK"]}'
+  -d '{"factory_id":1,"channel_ids":[1,2],"category_codes":["B","PTK"],"times":[8,14,18],"start_date":"2026-10-25"}'
 ```
+
+**الجدولة (`times`):** ساعات النشر اليومية بتوقيت `PUBLISH_TIMEZONE` (الجزائر افتراضياً، UTC+1)، وتقبل `[8,14,18]` أو `"8,14,18"` أو `["08:30"]`. تُوزَّع المنشورات عليها بالترتيب يوماً بعد يوم (6 منشورات مع 3 أوقات = يومان)، وتُحفظ في `scheduled_at` بتوقيت UTC. `start_date` اختياري (الافتراضي اليوم، وما فات من مواعيده يُتخطى). المواعيد المحجوزة لمنشورات غير منشورة لنفس المصنع تُتخطى، فالدفعة الجديدة تلحق بآخر الطابور. `times` إلزامي في `prepare/all` و`prepare/by-category` كي لا تُنشر الدفعة كلها فور إنشائها؛ وفي `prepare/by-sku` اختياري (بدونه يُنشر في أقرب دقيقة).
 
 `channel_ids` هي معرّفات الصفحات/القنوات المحلية في جدول `social_channels`، وليست معرّفات الصفحات الأصلية لدى المنصة. ترجع الاستجابة عدد المنشورات ومعرّفاتها. مسار الفئة يختار المنتجات المسجلة فعلًا برمز الفئة؛ شغّل سكريبت التصنيف أدناه أولًا إذا كانت قيم `category_code` لم تُملأ.
 

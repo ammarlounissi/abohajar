@@ -172,7 +172,7 @@ class PreparedPostRoutesTests(RouterCase):
         self.add_product("B001", "B")
         self.add_product("PTK002", "PTK")
         response = self.client.post("/api/posts/prepare/all", json={
-            "factory_id": 1, "channel_ids": [1],
+            "factory_id": 1, "channel_ids": [1], "times": [8, 14],
         })
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["count"], 2)
@@ -187,6 +187,7 @@ class PreparedPostRoutesTests(RouterCase):
         self.add_product("C003", "C")
         response = self.client.post("/api/posts/prepare/by-category", json={
             "factory_id": 1, "channel_ids": [1], "category_codes": ["b", "PTK"],
+            "times": "8,14,18",
         })
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["count"], 2)
@@ -194,6 +195,51 @@ class PreparedPostRoutesTests(RouterCase):
             "factory_id": 1, "channel_ids": [1], "skus": ["B999"],
         })
         self.assertEqual(missing.status_code, 404)
+
+    def _scheduled(self):
+        with self.Session() as db:
+            return [p.scheduled_at for p in db.query(models.Post).order_by(models.Post.scheduled_at)]
+
+    def test_prepare_all_spreads_posts_over_daily_times_stored_as_utc(self):
+        for i in range(3):
+            self.add_product(f"B00{i + 1}", "B")
+        response = self.client.post("/api/posts/prepare/all", json={
+            "factory_id": 1, "channel_ids": [1], "times": [8, 14], "start_date": "2030-01-01",
+        })
+        self.assertEqual(response.status_code, 201)
+        # الجزائر UTC+1: 08:00 -> 07:00Z و14:00 -> 13:00Z
+        self.assertEqual(self._scheduled(), [
+            datetime(2030, 1, 1, 7), datetime(2030, 1, 1, 13), datetime(2030, 1, 2, 7),
+        ])
+        body = response.json()
+        self.assertTrue(body["first_scheduled_at"].startswith("2030-01-01T07:00"))
+        self.assertTrue(body["last_scheduled_at"].startswith("2030-01-02T07:00"))
+
+    def test_second_batch_continues_the_queue_instead_of_colliding(self):
+        self.add_product("B001", "B")
+        self.add_product("PTK002", "PTK")
+        payload = {"factory_id": 1, "channel_ids": [1], "times": [8, 14], "start_date": "2030-01-01"}
+        self.client.post("/api/posts/prepare/by-category", json={**payload, "category_codes": ["B"]})
+        self.client.post("/api/posts/prepare/by-category", json={**payload, "category_codes": ["PTK"]})
+        self.assertEqual(self._scheduled(), [datetime(2030, 1, 1, 7), datetime(2030, 1, 1, 13)])
+
+    def test_prepare_all_and_category_require_times(self):
+        self.add_product("B001", "B")
+        self.assertEqual(self.client.post("/api/posts/prepare/all", json={
+            "factory_id": 1, "channel_ids": [1]}).status_code, 422)
+        self.assertEqual(self.client.post("/api/posts/prepare/by-category", json={
+            "factory_id": 1, "channel_ids": [1], "category_codes": ["B"]}).status_code, 422)
+        self.assertEqual(self.client.post("/api/posts/prepare/all", json={
+            "factory_id": 1, "channel_ids": [1], "times": [25]}).status_code, 422)
+
+    def test_by_sku_without_times_stays_immediate_and_start_date_needs_times(self):
+        self.add_product("B001", "B")
+        r = self.client.post("/api/posts/prepare/by-sku", json={"factory_id": 1, "channel_ids": [1], "skus": ["B001"]})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(self._scheduled(), [None])
+        bad = self.client.post("/api/posts/prepare/by-sku", json={
+            "factory_id": 1, "channel_ids": [1], "skus": ["B001"], "start_date": "2030-01-01"})
+        self.assertEqual(bad.status_code, 422)
 
 
 class PublishNowTests(RouterCase):

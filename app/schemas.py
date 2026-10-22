@@ -1,9 +1,10 @@
 import re
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.services.schedule_slots import parse_times
 from app.models import Availability, Channel, ChannelPlatform, PostApproval, PostStatus, SyncStatus
 
 SKU_PATTERN = r"^[A-Z0-9][A-Z0-9_-]{1,49}$"   # مثال: STONE-GLM-01
@@ -255,6 +256,9 @@ class PostUpdate(BaseModel):
 class PreparedPostsRequest(BaseModel):
     factory_id: int = Field(gt=0)
     channel_ids: List[int] = Field(min_length=1)
+    # ساعات النشر اليومية بتوقيت الجزائر: [8, 14, 18] أو "8,14,18" أو ["08:30"]. المنشورات تُوزَّع عليها يوماً بعد يوم.
+    times: Optional[List[time]] = None
+    start_date: Optional[date] = None        # أول يوم (محلي) للبدء؛ الافتراضي اليوم، وما فات من مواعيده يُتخطى
 
     @field_validator("channel_ids")
     @classmethod
@@ -262,6 +266,31 @@ class PreparedPostsRequest(BaseModel):
         if any(channel_id <= 0 for channel_id in values):
             raise ValueError("معرّف القناة يجب أن يكون موجباً")
         return list(dict.fromkeys(values))
+
+    @field_validator("times", mode="before")
+    @classmethod
+    def validate_times(cls, values):
+        return None if values is None else parse_times(values)
+
+    @model_validator(mode="after")
+    def _start_date_needs_times(self):
+        if self.start_date and not self.times:
+            raise ValueError("start_date يحتاج times")
+        return self
+
+
+class _ScheduledPostsRequest(PreparedPostsRequest):
+    """طلبات الدفعات الكبيرة (كل المنتجات/تصنيف): times إلزامي كي لا تُنشر الدفعة كلها فوراً."""
+
+    @model_validator(mode="after")
+    def _require_times(self):
+        if not self.times:
+            raise ValueError("times مطلوب، مثل [8, 14, 18] (ساعات النشر اليومية بتوقيت الجزائر)")
+        return self
+
+
+class PreparedPostsAllRequest(_ScheduledPostsRequest):
+    pass
 
 
 class PreparedPostsBySkuRequest(PreparedPostsRequest):
@@ -280,7 +309,7 @@ class PreparedPostsBySkuRequest(PreparedPostsRequest):
         return list(dict.fromkeys(values))
 
 
-class PreparedPostsByCategoryRequest(PreparedPostsRequest):
+class PreparedPostsByCategoryRequest(_ScheduledPostsRequest):
     category_codes: List[str] = Field(min_length=1)
 
     @field_validator("category_codes", mode="before")
@@ -300,6 +329,8 @@ class PreparedPostsResponse(BaseModel):
     status: str = "success"
     count: int
     post_ids: List[int]
+    first_scheduled_at: Optional[datetime] = None    # UTC، كبقية حقول التاريخ
+    last_scheduled_at: Optional[datetime] = None
 
 
 class PostDeliveryResponse(BaseModel):

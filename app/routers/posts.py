@@ -58,7 +58,11 @@ def get_unpublished_posts(
 
 
 def _prepared_posts_response(posts):
-    return {"status": "success", "count": len(posts), "post_ids": [post.id for post in posts]}
+    scheduled = [post.scheduled_at for post in posts if post.scheduled_at]
+    return {
+        "status": "success", "count": len(posts), "post_ids": [post.id for post in posts],
+        "first_scheduled_at": min(scheduled, default=None), "last_scheduled_at": max(scheduled, default=None),
+    }
 
 
 @router.post("/prepare/by-sku", response_model=schemas.PreparedPostsResponse,
@@ -66,14 +70,17 @@ def _prepared_posts_response(posts):
 def prepare_posts_by_sku(request: schemas.PreparedPostsBySkuRequest, db: Session = Depends(get_db)):
     posts = create_ready_posts(
         db, request.factory_id, request.channel_ids, skus=request.skus,
+        times=request.times, start_date=request.start_date,
     )
     return _prepared_posts_response(posts)
 
 
 @router.post("/prepare/all", response_model=schemas.PreparedPostsResponse,
              status_code=status.HTTP_201_CREATED)
-def prepare_posts_for_all_products(request: schemas.PreparedPostsRequest, db: Session = Depends(get_db)):
-    posts = create_ready_posts(db, request.factory_id, request.channel_ids)
+def prepare_posts_for_all_products(request: schemas.PreparedPostsAllRequest, db: Session = Depends(get_db)):
+    posts = create_ready_posts(
+        db, request.factory_id, request.channel_ids, times=request.times, start_date=request.start_date,
+    )
     return _prepared_posts_response(posts)
 
 
@@ -84,6 +91,7 @@ def prepare_posts_by_category(
 ):
     posts = create_ready_posts(
         db, request.factory_id, request.channel_ids, category_codes=request.category_codes,
+        times=request.times, start_date=request.start_date,
     )
     return _prepared_posts_response(posts)
 
