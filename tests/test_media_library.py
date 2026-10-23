@@ -161,6 +161,32 @@ class FactoryMediaLibraryTests(unittest.TestCase):
             self.assertEqual(response.status_code, 422)
             self.assertEqual([path for path in Path(temp_dir).rglob("*") if path.is_file()], [])
 
+    def test_upload_retries_on_filename_collision_without_changing_existing_file(self):
+        existing_filename = "a" * 32
+        replacement_filename = "b" * 32
+        with TemporaryDirectory() as temp_dir, \
+                mock.patch.object(settings, "FACTORY_MEDIA_ROOT", Path(temp_dir)), \
+                mock.patch.object(settings, "BASE_URL", "https://api.example.test"), \
+                mock.patch(
+                    "app.services.media_library.uuid.uuid4",
+                    side_effect=[mock.Mock(hex=existing_filename), mock.Mock(hex=replacement_filename)],
+                ):
+            factory_dir = Path(temp_dir) / "1"
+            factory_dir.mkdir()
+            existing_file = factory_dir / f"{existing_filename}.jpg"
+            existing_file.write_bytes(b"existing media")
+
+            uploaded = self.client.post(
+                "/api/factories/1/media/upload",
+                files={"file": ("sample.jpg", b"new media", "image/jpeg")},
+            )
+
+            self.assertEqual(uploaded.status_code, 201, uploaded.text)
+            self.assertEqual(existing_file.read_bytes(), b"existing media")
+            new_file = factory_dir / f"{replacement_filename}.jpg"
+            self.assertEqual(new_file.read_bytes(), b"new media")
+            self.assertTrue(uploaded.json()["url"].endswith(new_file.name))
+
     def test_public_factory_media_route_rejects_invalid_filename(self):
         with TemporaryDirectory() as temp_dir, \
                 mock.patch.object(settings, "FACTORY_MEDIA_ROOT", Path(temp_dir)):

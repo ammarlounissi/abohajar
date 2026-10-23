@@ -85,11 +85,20 @@ def upload_factory_media(
 
     directory = settings.FACTORY_MEDIA_ROOT / str(factory.id)
     directory.mkdir(parents=True, exist_ok=True)
-    saved_filename = f"{uuid.uuid4().hex}{extension}"
-    path = directory / saved_filename
+    for _ in range(5):
+        saved_filename = f"{uuid.uuid4().hex}{extension}"
+        path = directory / saved_filename
+        try:
+            destination = path.open("xb")
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise OSError("تعذّر إنشاء اسم فريد لملف الوسائط بعد عدة محاولات")
+
     size = 0
     try:
-        with path.open("xb") as destination:
+        with destination:
             while chunk := file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
