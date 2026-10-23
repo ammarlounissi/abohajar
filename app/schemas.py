@@ -35,6 +35,25 @@ class FactoryResponse(FactoryBase):
     is_active: bool
 
 
+class FactoryChatRequest(BaseModel):
+    factory_id: int = Field(gt=0)
+    prompt: str = Field(min_length=1, max_length=20000)
+
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def strip_prompt(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class FactoryChatResponse(BaseModel):
+    id: int
+    factory_id: int
+    prompt: str
+    response: str
+    model: str
+    created_at: datetime
+
+
 class FactoryContactCreate(BaseModel):
     channel: Channel
     identifier: str = Field(min_length=1, max_length=100)

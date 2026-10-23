@@ -93,6 +93,23 @@ class Factory(Base):
     products = relationship("Product", back_populates="factory")
     posts = relationship("Post", back_populates="factory")
     contacts = relationship("FactoryContact", back_populates="factory", cascade="all, delete-orphan")
+    chat_messages = relationship(
+        "FactoryChatMessage", back_populates="factory", cascade="all, delete-orphan",
+        order_by="FactoryChatMessage.id",
+    )
+
+
+class FactoryChatMessage(Base):
+    """سؤال وردّ من محادثة Ollama، محفوظان كسجل مرتبط بمصنع."""
+    __tablename__ = "factory_chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    response = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    factory = relationship("Factory", back_populates="chat_messages")
 
 
 class FactoryContact(Base):

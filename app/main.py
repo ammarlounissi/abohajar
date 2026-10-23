@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.routers import factories, posts, products, public_media, social_channels, webhook
+from app.routers import chat, factories, posts, products, public_media, social_channels, webhook
 from app.services import errors
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -48,6 +48,7 @@ async def service_error_handler(request: Request, exc: errors.ServiceError):
 
 
 app.include_router(factories.router)
+app.include_router(chat.router)
 app.include_router(products.router)
 app.include_router(posts.router)
 app.include_router(public_media.router)

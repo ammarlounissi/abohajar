@@ -129,7 +129,13 @@ curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: applicat
 # ربط تيليجرام (معرّف المستخدم الرقمي)
 curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"channel":"telegram","identifier":"123456789"}'
+
+# محادثة نموذج Ollama. تحفظ الأسئلة والأجوبة وتستخدم سجل المصنع كسياق في الطلبات التالية.
+curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"factory_id":1,"prompt":"اكتب وصفاً قصيراً لهذا المنتج"}'
 ```
+
+يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) والنموذج `OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). يتطلب تشغيل Ollama على نفس الجهاز/بيئة الشبكة التي يعمل فيها التطبيق وتحميل النموذج. إذا تعذر الاتصال أو لم يرد Ollama بنص، يرجع المسار `502`. يلزم تطبيق ترحيل قاعدة البيانات `alembic upgrade head` لإضافة جدول سجل المحادثات.
 
 ---
 
