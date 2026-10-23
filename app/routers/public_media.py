@@ -26,11 +26,14 @@ def get_factory_media(factory_id: int, filename: str):
         raise HTTPException(status_code=404, detail="الوسيط غير موجود")
     extension = path.suffix.lower()
     content_type = MEDIA_EXTENSIONS[extension][1]
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if extension == ".svg":
+        headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
     return FileResponse(
         path,
         media_type=content_type,
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=headers,
     )

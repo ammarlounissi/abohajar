@@ -139,7 +139,7 @@ class FactoryMediaLibraryTests(unittest.TestCase):
                 mock.patch.object(settings, "FACTORY_MEDIA_ROOT", Path(temp_dir)):
             unsupported = self.client.post(
                 "/api/factories/1/media/upload",
-                files={"file": ("payload.svg", b"<svg/>", "image/svg+xml")},
+                files={"file": ("payload.svgz", b"<svg/>", "image/svg+xml")},
             )
             mismatch = self.client.post(
                 "/api/factories/1/media/upload",
@@ -148,6 +148,37 @@ class FactoryMediaLibraryTests(unittest.TestCase):
             self.assertEqual(unsupported.status_code, 422)
             self.assertEqual(mismatch.status_code, 422)
             self.assertEqual(list(Path(temp_dir).rglob("*")), [])
+
+    def test_upload_and_serve_ico_and_svg(self):
+        files = (
+            ("logo.ico", b"icon data", "image/vnd.microsoft.icon", "image/x-icon"),
+            ("logo.svg", b"<svg></svg>", "image/svg+xml", "image/svg+xml"),
+        )
+        with TemporaryDirectory() as temp_dir, \
+                mock.patch.object(settings, "FACTORY_MEDIA_ROOT", Path(temp_dir)), \
+                mock.patch.object(settings, "BASE_URL", "https://api.example.test"):
+            for name, content, upload_type, response_type in files:
+                with self.subTest(extension=Path(name).suffix):
+                    uploaded = self.client.post(
+                        "/api/factories/1/media/upload",
+                        files={"file": (name, content, upload_type)},
+                    )
+
+                    self.assertEqual(uploaded.status_code, 201, uploaded.text)
+                    media = uploaded.json()
+                    self.assertEqual(media["media_type"], "image")
+                    served = self.client.get(
+                        media["url"].replace("https://api.example.test", "")
+                    )
+                    self.assertEqual(served.status_code, 200)
+                    self.assertEqual(served.content, content)
+                    self.assertEqual(served.headers["content-type"], response_type)
+                    if name.endswith(".svg"):
+                        self.assertIn("attachment", served.headers["content-disposition"])
+                    self.assertEqual(
+                        self.client.delete(f"/api/factories/1/media/{media['id']}").status_code,
+                        200,
+                    )
 
     def test_upload_enforces_file_size_limit_and_removes_partial_file(self):
         with TemporaryDirectory() as temp_dir, \

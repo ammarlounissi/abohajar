@@ -19,11 +19,15 @@ MEDIA_EXTENSIONS = {
     ".png": ("image", "image/png"),
     ".webp": ("image", "image/webp"),
     ".gif": ("image", "image/gif"),
+    ".ico": ("image", "image/x-icon"),
+    ".svg": ("image", "image/svg+xml"),
     ".mp4": ("video", "video/mp4"),
     ".mov": ("video", "video/quicktime"),
     ".webm": ("video", "video/webm"),
 }
-_SAVED_FILENAME = re.compile(r"^[0-9a-f]{32}\.(?:jpg|jpeg|png|webp|gif|mp4|mov|webm)$")
+_SAVED_FILENAME = re.compile(
+    r"^[0-9a-f]{32}\.(?:jpg|jpeg|png|webp|gif|ico|svg|mp4|mov|webm)$"
+)
 
 
 def list_factory_media(
@@ -80,7 +84,10 @@ def upload_factory_media(
     if media_info is None:
         raise InvalidInputError("امتداد الملف غير مدعوم")
     media_type, expected_content_type = media_info
-    if content_type and content_type != expected_content_type:
+    accepted_content_types = {expected_content_type}
+    if extension == ".ico":
+        accepted_content_types.add("image/vnd.microsoft.icon")
+    if content_type and content_type not in accepted_content_types:
         raise InvalidInputError("نوع محتوى الملف لا يتوافق مع امتداده")
 
     directory = settings.FACTORY_MEDIA_ROOT / str(factory.id)
@@ -135,7 +142,7 @@ def delete_factory_media(db: Session, factory_id: int, media_id: int) -> None:
     if item is None:
         raise NotFoundError("الوسيط غير موجود في مكتبة هذا المصنع")
     match = re.fullmatch(
-        rf"/api/media/factories/{factory_id}/([0-9a-f]{{32}}\.(?:jpg|jpeg|png|webp|gif|mp4|mov|webm))",
+        rf"/api/media/factories/{factory_id}/([0-9a-f]{{32}}\.(?:jpg|jpeg|png|webp|gif|ico|svg|mp4|mov|webm))",
         urlsplit(item.url).path,
     )
     file_path = factory_media_file_path(factory_id, match.group(1)) if match else None
