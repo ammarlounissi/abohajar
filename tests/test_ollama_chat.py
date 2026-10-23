@@ -22,7 +22,9 @@ class OllamaChatRouterTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         self.Session = sessionmaker(bind=engine)
         with self.Session() as db:
-            db.add(models.Factory(id=1, name="مصنع الاختبار", phone_number="213550000000"))
+            db.add(models.Factory(
+                id=1, name="مصنع الاختبار", activity="صناعة الحجر الطبيعي", phone_number="213550000000",
+            ))
             db.commit()
 
         app = FastAPI()
@@ -70,7 +72,16 @@ class OllamaChatRouterTests(unittest.TestCase):
         )
         self.assertIn("id", body)
         self.assertIn("created_at", body)
-        generate.assert_awaited_once_with("المستخدم: أهلاً\nالمساعد:")
+        generate.assert_awaited_once_with([
+            {
+                "role": "system",
+                "content": (
+                    f"{ollama_chat.SYSTEM_INSTRUCTION}\n\n"
+                    "بيانات المصنع:\nالاسم: مصنع الاختبار\nالنشاط: صناعة الحجر الطبيعي"
+                ),
+            },
+            {"role": "user", "content": "أهلاً"},
+        ])
         with self.Session() as db:
             saved = db.query(models.FactoryChatMessage).one()
             self.assertEqual((saved.factory_id, saved.prompt, saved.response), (1, "أهلاً", "مرحباً بك"))
@@ -85,10 +96,20 @@ class OllamaChatRouterTests(unittest.TestCase):
             second = self.request(prompt="وما سعره؟")
 
         self.assertEqual((first.status_code, second.status_code), (200, 200))
-        generate.assert_has_awaits([
-            mock.call("المستخدم: ما اسم المنتج؟\nالمساعد:"),
-            mock.call("المستخدم: ما اسم المنتج؟\nالمساعد: الرد الأول\nالمستخدم: وما سعره؟\nالمساعد:"),
-        ])
+        first_messages = generate.await_args_list[0].args[0]
+        second_messages = generate.await_args_list[1].args[0]
+        self.assertEqual(
+            [(message["role"], message["content"]) for message in first_messages[1:]],
+            [("user", "ما اسم المنتج؟")],
+        )
+        self.assertEqual(
+            [(message["role"], message["content"]) for message in second_messages[1:]],
+            [
+                ("user", "ما اسم المنتج؟"),
+                ("assistant", "الرد الأول"),
+                ("user", "وما سعره؟"),
+            ],
+        )
         with self.Session() as db:
             self.assertEqual(db.query(models.FactoryChatMessage).count(), 2)
 
@@ -112,15 +133,44 @@ class OllamaChatRouterTests(unittest.TestCase):
         with self.Session() as db:
             self.assertEqual(db.query(models.FactoryChatMessage).count(), 0)
 
+    def test_context_keeps_only_latest_five_turns_and_fixed_profile(self):
+        with self.Session() as db:
+            db.add_all([
+                models.FactoryChatMessage(factory_id=1, prompt=f"سؤال {i}", response=f"رد {i}")
+                for i in range(7)
+            ])
+            db.commit()
+
+        with mock.patch(
+            "app.services.ollama_chat.generate_reply",
+            new_callable=mock.AsyncMock,
+            return_value="تم",
+        ) as generate:
+            response = self.request(prompt="السؤال الجديد")
+
+        self.assertEqual(response.status_code, 200)
+        messages = generate.await_args.args[0]
+        self.assertEqual(len(messages), 12)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("مصنع الاختبار", messages[0]["content"])
+        self.assertIn("صناعة الحجر الطبيعي", messages[0]["content"])
+        self.assertEqual(
+            [message["content"] for message in messages[1:]],
+            [
+                "سؤال 2", "رد 2", "سؤال 3", "رد 3", "سؤال 4",
+                "رد 4", "سؤال 5", "رد 5", "سؤال 6", "رد 6", "السؤال الجديد",
+            ],
+        )
+
 
 class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_generate_reply_calls_ollama_generate_endpoint(self):
+    async def test_generate_reply_calls_ollama_chat_endpoint(self):
         captured = {}
 
         def respond(request):
             captured["url"] = str(request.url)
             captured["payload"] = request.read()
-            return httpx.Response(200, json={"response": "نص مولّد", "done": True})
+            return httpx.Response(200, json={"message": {"role": "assistant", "content": "نص مولّد"}})
 
         transport = httpx.MockTransport(respond)
         client = httpx.AsyncClient(transport=transport)
@@ -129,13 +179,23 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(settings, "OLLAMA_BASE_URL", "http://localhost:11434"),
             mock.patch.object(settings, "OLLAMA_MODEL", "qwen2.5:3b"),
         ):
-            result = await ollama_chat.generate_reply("اكتب وصفاً")
+            result = await ollama_chat.generate_reply([
+                {"role": "system", "content": "تعليمات"},
+                {"role": "user", "content": "اكتب وصفاً"},
+            ])
 
         self.assertEqual(result, "نص مولّد")
-        self.assertEqual(captured["url"], "http://localhost:11434/api/generate")
+        self.assertEqual(captured["url"], "http://localhost:11434/api/chat")
         self.assertEqual(
             json.loads(captured["payload"]),
-            {"model": "qwen2.5:3b", "prompt": "اكتب وصفاً", "stream": False},
+            {
+                "model": "qwen2.5:3b",
+                "messages": [
+                    {"role": "system", "content": "تعليمات"},
+                    {"role": "user", "content": "اكتب وصفاً"},
+                ],
+                "stream": False,
+            },
         )
 
 

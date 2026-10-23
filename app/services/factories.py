@@ -80,10 +80,12 @@ def _phone_taken(db: Session, phone: str, exclude_factory_id: Optional[int] = No
     return contact.first() is not None
 
 
-def create_factory(db: Session, *, name: str, phone_number: str, address: Optional[str] = None) -> models.Factory:
+def create_factory(
+    db: Session, *, name: str, phone_number: str, activity: str = "", address: Optional[str] = None
+) -> models.Factory:
     if _phone_taken(db, phone_number):
         raise DuplicateError("رقم الهاتف مسجل بالفعل لمصنع آخر")
-    factory = models.Factory(name=name, phone_number=phone_number, address=address)
+    factory = models.Factory(name=name, phone_number=phone_number, activity=activity, address=address)
     factory.contacts.append(models.FactoryContact(
         channel=Channel.WHATSAPP.value,
         identifier=normalize_identifier(Channel.WHATSAPP.value, phone_number),

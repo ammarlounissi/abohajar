@@ -83,6 +83,7 @@ class Factory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
+    activity = Column(Text, nullable=False, default="", server_default="")
     # قديم: رقم واتساب الأساسي. مصدر الحقيقة لتعريف المصنع في القنوات هو factory_contacts.
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
     address = Column(String(255), nullable=True)

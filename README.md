@@ -124,18 +124,18 @@ KEY=<ADMIN_API_KEY>; API=http://127.0.0.1:8000
 
 # إنشاء مصنع (رقمه يصبح جهة واتساب تلقائياً)
 curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"name":"مصنع الاختبار","phone_number":"+213550000000"}'
+  -d '{"name":"مصنع الاختبار","activity":"صناعة الحجر الطبيعي","phone_number":"+213550000000"}'
 
 # ربط تيليجرام (معرّف المستخدم الرقمي)
 curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"channel":"telegram","identifier":"123456789"}'
 
-# محادثة نموذج Ollama. تحفظ الأسئلة والأجوبة وتستخدم سجل المصنع كسياق في الطلبات التالية.
+# محادثة Ollama: يرسل تعليمات المشروع ونشاط المصنع وآخر خمسة تبادلات.
 curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"factory_id":1,"prompt":"اكتب وصفاً قصيراً لهذا المنتج"}'
 ```
 
-يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) والنموذج `OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). يتطلب تشغيل Ollama على نفس الجهاز/بيئة الشبكة التي يعمل فيها التطبيق وتحميل النموذج. إذا تعذر الاتصال أو لم يرد Ollama بنص، يرجع المسار `502`. يلزم تطبيق ترحيل قاعدة البيانات `alembic upgrade head` لإضافة جدول سجل المحادثات.
+يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) والنموذج `OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). يرسل تعليمات عامة ثابتة، واسم المصنع ونشاطه، وآخر خمسة أزواج سؤال/جواب فقط، بالإضافة إلى السؤال الجديد. أضف النشاط أو حدّثه عبر `POST/PATCH /api/factories/`. يتطلب تشغيل Ollama على نفس الجهاز/بيئة الشبكة التي يعمل فيها التطبيق وتحميل النموذج. إذا تعذر الاتصال أو لم يرد Ollama بنص، يرجع المسار `502`. طبّق `alembic upgrade head` لإضافة سجل المحادثات ونشاط المصنع إلى قاعدة البيانات.
 
 ---
 

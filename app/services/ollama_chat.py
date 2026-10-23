@@ -9,6 +9,12 @@ from app.core.config import settings
 from app.services import factories as factory_service
 
 logger = logging.getLogger(__name__)
+MAX_CONTEXT_TURNS = 5
+SYSTEM_INSTRUCTION = (
+    "أنت مساعد لمشروع حجرت بلادي، تساعد المصانع في تنظيم معلومات منتجاتها وكتابة أوصافها "
+    "والرد على استفساراتها بوضوح وبالعربية. لا تخترع أسعارًا أو مواصفات غير مذكورة، "
+    "واسأل عند نقص المعلومات."
+)
 
 
 def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.AsyncClient:
@@ -19,25 +25,28 @@ class OllamaUnavailableError(Exception):
     """Ollama did not return a usable response."""
 
 
-def _conversation_prompt(history: list[models.FactoryChatMessage], prompt: str) -> str:
-    messages = []
+def _conversation_messages(
+    factory: models.Factory, history: list[models.FactoryChatMessage], prompt: str
+) -> list[dict[str, str]]:
+    profile = f"{SYSTEM_INSTRUCTION}\n\nبيانات المصنع:\nالاسم: {factory.name}\nالنشاط: {factory.activity or 'غير محدد'}"
+    messages = [{"role": "system", "content": profile}]
     for message in history:
         messages.extend((
-            f"المستخدم: {message.prompt}",
-            f"المساعد: {message.response}",
+            {"role": "user", "content": message.prompt},
+            {"role": "assistant", "content": message.response},
         ))
-    messages.extend((f"المستخدم: {prompt}", "المساعد:"))
-    return "\n".join(messages)
+    messages.append({"role": "user", "content": prompt})
+    return messages
 
 
-async def generate_reply(prompt: str) -> str:
+async def generate_reply(messages: list[dict[str, str]]) -> str:
     try:
         async with make_client() as client:
             response = await client.post(
-                f"{settings.OLLAMA_BASE_URL}/api/generate",
+                f"{settings.OLLAMA_BASE_URL}/api/chat",
                 json={
                     "model": settings.OLLAMA_MODEL,
-                    "prompt": prompt,
+                    "messages": messages,
                     "stream": False,
                 },
             )
@@ -52,23 +61,26 @@ async def generate_reply(prompt: str) -> str:
 
     if (
         not isinstance(payload, dict)
-        or not isinstance(payload.get("response"), str)
-        or not payload["response"].strip()
+        or not isinstance(payload.get("message"), dict)
+        or not isinstance(payload["message"].get("content"), str)
+        or not payload["message"]["content"].strip()
     ):
-        logger.warning("Ollama response is missing its generated text")
+        logger.warning("Ollama response is missing its generated message")
         raise OllamaUnavailableError
-    return payload["response"]
+    return payload["message"]["content"]
 
 
 async def chat(db: Session, factory_id: int, prompt: str) -> dict:
-    factory_service.get_factory(db, factory_id)
-    history = (
+    factory = factory_service.get_factory(db, factory_id)
+    history = list(reversed(
         db.query(models.FactoryChatMessage)
         .filter(models.FactoryChatMessage.factory_id == factory_id)
-        .order_by(models.FactoryChatMessage.id)
+        .order_by(models.FactoryChatMessage.id.desc())
+        .limit(MAX_CONTEXT_TURNS)
         .all()
-    )
-    response = await generate_reply(_conversation_prompt(history, prompt))
+    ))
+    messages = _conversation_messages(factory, history, prompt)
+    response = await generate_reply(messages)
 
     message = models.FactoryChatMessage(
         factory_id=factory_id,

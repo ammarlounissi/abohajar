@@ -13,8 +13,16 @@ SKU_PATTERN = r"^[A-Z0-9][A-Z0-9_-]{1,49}$"   # مثال: STONE-GLM-01
 # --- المصانع ---
 class FactoryBase(BaseModel):
     name: str = Field(min_length=2, max_length=100)
+    activity: str = Field(default="", max_length=500)
     phone_number: str = Field(pattern=r"^\+?\d{8,15}$")   # بصيغة دولية، مثل +213550000000
     address: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("activity", mode="before")
+    @classmethod
+    def strip_activity(cls, value):
+        if value is None:
+            raise ValueError("activity لا يقبل null")
+        return value.strip() if isinstance(value, str) else value
 
 
 class FactoryCreate(FactoryBase):
@@ -23,9 +31,17 @@ class FactoryCreate(FactoryBase):
 
 class FactoryUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    activity: Optional[str] = Field(default=None, max_length=500)
     phone_number: Optional[str] = Field(default=None, pattern=r"^\+?\d{8,15}$")
     address: Optional[str] = Field(default=None, max_length=255)
     is_active: Optional[bool] = None
+
+    @field_validator("activity", mode="before")
+    @classmethod
+    def strip_activity(cls, value):
+        if value is None:
+            raise ValueError("activity لا يقبل null")
+        return value.strip() if isinstance(value, str) else value
 
 
 class FactoryResponse(FactoryBase):
