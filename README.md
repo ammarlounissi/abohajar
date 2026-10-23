@@ -150,6 +150,15 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 
 المجلد لازم يكون قابلاً للكتابة بواسطة مستخدم تشغيل التطبيق. رابط الملف المرفوع يُبنى من `BASE_URL` ويُقدّم عبر `/api/media/factories/{factory_id}/{filename}`. تبقى إضافة رابط خارجي عبر مسار `POST` الأساسي مدعومة. طبّق `alembic upgrade head` لإنشاء الجدول.
 
+لتسجيل روابط صور المنتجات الموجودة لمصنع رقم 4 في مكتبة الوسائط، شغّل من جذر المشروع:
+
+```bash
+python -m scripts.register_factory_product_media          # معاينة دون كتابة
+python -m scripts.register_factory_product_media --apply  # التسجيل الفعلي
+```
+
+يفحص السكريبت الرابط الأساسي والروابط الإضافية، ويتخطى الروابط المسجلة مسبقاً والمكررة. تُسجّل الروابط كصور (`image`) مع رمز المنتج واسمه في الوصف.
+
 ---
 
 ## 4. تشغيل الاختبارات (وحدة)
