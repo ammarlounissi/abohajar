@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime, time
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.schedule_slots import parse_times
 from app.models import Availability, Channel, ChannelPlatform, PostApproval, PostStatus, SyncStatus
@@ -82,6 +82,27 @@ class FactoryContactResponse(BaseModel):
     factory_id: int
     channel: str
     identifier: str
+
+
+class FactoryMediaCreate(BaseModel):
+    media_type: Literal["image", "video"]
+    url: AnyHttpUrl
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def strip_description(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class FactoryMediaResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    media_type: str
+    url: str
+    description: Optional[str] = None
+    factory_id: int
 
 
 # --- قنوات النشر ---

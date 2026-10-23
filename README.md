@@ -137,6 +137,19 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 
 يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) والنموذج `OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). يرسل تعليمات عامة ثابتة، واسم المصنع ونشاطه، وآخر خمسة أزواج سؤال/جواب فقط، بالإضافة إلى السؤال الجديد. أضف النشاط أو حدّثه عبر `POST/PATCH /api/factories/`. يتطلب تشغيل Ollama على نفس الجهاز/بيئة الشبكة التي يعمل فيها التطبيق وتحميل النموذج. إذا تعذر الاتصال أو لم يرد Ollama بنص، يرجع المسار `502`. طبّق `alembic upgrade head` لإضافة سجل المحادثات ونشاط المصنع إلى قاعدة البيانات.
 
+### مكتبة وسائط المصنع
+
+تُحفظ روابط الصور والفيديوهات في جدول `media` المرتبط بالمصنع. جميع المسارات التالية محمية بـ `X-API-Key`:
+
+| المسار | الوظيفة |
+| --- | --- |
+| `POST /api/factories/{factory_id}/media` | إضافة وسيط بصيغة JSON: `media_type` (`image` أو `video`)، `url` (رابط HTTP/HTTPS)، و`description` اختياري |
+| `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `/home/ammar/media/{factory_id}`، ويُقبل JPG/PNG/WEBP/GIF أو MP4/MOV/WEBM حتى 100 ميغابايت |
+| `GET /api/factories/{factory_id}/media` | عرض وسائط المصنع، مع `?media_type=image` أو `?media_type=video`، و`skip` و`limit` للتصفح |
+| `DELETE /api/factories/{factory_id}/media/{media_id}` | حذف وسيط من مكتبة المصنع المحدد |
+
+المجلد لازم يكون قابلاً للكتابة بواسطة مستخدم تشغيل التطبيق. رابط الملف المرفوع يُبنى من `BASE_URL` ويُقدّم عبر `/api/media/factories/{factory_id}/{filename}`. تبقى إضافة رابط خارجي عبر مسار `POST` الأساسي مدعومة. طبّق `alembic upgrade head` لإنشاء الجدول.
+
 ---
 
 ## 4. تشغيل الاختبارات (وحدة)

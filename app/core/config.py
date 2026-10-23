@@ -85,6 +85,8 @@ class Settings:
     # مجلد صور المنتجات: مستقل عن كود المشروع، وتخدمه Nginx مباشرة.
     # البنية: {MEDIA_ROOT}/{الفئة}/{SKU}/{الرقم}.{الامتداد}  مثل  B/B001/1.jpg
     MEDIA_ROOT = Path(_get("MEDIA_ROOT")).expanduser() if _get("MEDIA_ROOT") else None
+    # مكتبة وسائط المصانع المرفوعة عبر API
+    FACTORY_MEDIA_ROOT = Path("/home/ammar/media")
     # أين تُنقل الصورة القديمة عند استبدالها (خارج MEDIA_ROOT كي لا تُزامَن ولا تُخدم)
     MEDIA_BACKUP_DIR = (
         Path(_get("MEDIA_BACKUP_DIR")).expanduser()

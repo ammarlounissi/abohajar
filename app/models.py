@@ -92,6 +92,7 @@ class Factory(Base):
 
     products = relationship("Product", back_populates="factory")
     posts = relationship("Post", back_populates="factory")
+    media_items = relationship("Media", back_populates="factory", cascade="all, delete-orphan")
     contacts = relationship("FactoryContact", back_populates="factory", cascade="all, delete-orphan")
     chat_messages = relationship(
         "FactoryChatMessage", back_populates="factory", cascade="all, delete-orphan",
@@ -125,6 +126,19 @@ class FactoryContact(Base):
     created_at = Column(DateTime, default=utc_now)
 
     factory = relationship("Factory", back_populates="contacts")
+
+
+class Media(Base):
+    """رابط صورة أو فيديو في مكتبة مصنع."""
+    __tablename__ = "media"
+
+    id = Column(Integer, primary_key=True)
+    media_type = Column(String(10), nullable=False)
+    url = Column(String(2000), nullable=False)
+    description = Column(Text, nullable=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+
+    factory = relationship("Factory", back_populates="media_items")
 
 
 class SocialChannel(Base):
