@@ -9,7 +9,7 @@
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 from typing import Optional, Union
 
@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.core.time import utc_now
 from app.services import media
 from app.services.meta import sync_product_to_meta
 from app.services.products import SkuOwnershipError, parse_caption, upsert_product
@@ -109,7 +110,7 @@ def find_pending(
     query = db.query(models.PendingMediaUpdate).filter(
         models.PendingMediaUpdate.factory_id == factory.id,
         models.PendingMediaUpdate.channel == channel,
-        models.PendingMediaUpdate.created_at >= datetime.utcnow() - PENDING_TTL,
+        models.PendingMediaUpdate.created_at >= utc_now() - PENDING_TTL,
     )
     if pending_id is not None:
         query = query.filter(models.PendingMediaUpdate.id == pending_id)

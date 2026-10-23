@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.time import utc_now
 from app.models import DeliveryStatus, PostStatus, ReportKind
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.social import build_publishers
@@ -131,7 +132,7 @@ def approve_post(db: Session, post_id: int, now: Optional[datetime] = None) -> m
         raise InvalidInputError("حدّد قناة نشر واحدة على الأقل قبل اعتماد المنشور")
     post.status = PostStatus.APPROVED
     post.approval = models.PostApproval.APPROVED
-    post.approved_at = now or datetime.utcnow()
+    post.approved_at = now or utc_now()
     db.commit()
     db.refresh(post)
     return post
@@ -163,7 +164,7 @@ def list_unpublished(db: Session, limit: int = 100, offset: int = 0) -> List[mod
 def claim_post(db: Session, post_id: int, now: Optional[datetime] = None) -> models.Post:
     """يحجز منشوراً بعينه للنشر الفوري (يتجاوز scheduled_at والموافقة والسقف اليومي).
     الحجز بجملة UPDATE واحدة فلا يتزامن مع المؤقت. المنشور المنشور أو قيد النشر يُرفض."""
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     post = db.get(models.Post, post_id)
     if not post:
         raise NotFoundError("المنشور غير موجود")
@@ -191,7 +192,7 @@ async def publish_claimed_in_background(post_id: int) -> None:
     try:
         post = db.get(models.Post, post_id)
         if post and post.status == PostStatus.PUBLISHING:
-            await publish_post(db, post, build_publishers(), datetime.utcnow())
+            await publish_post(db, post, build_publishers(), utc_now())
     except Exception:
         logger.exception("manual publish of post %s crashed", post_id)
     finally:
@@ -378,7 +379,7 @@ async def publish_post(db: Session, post: models.Post, publishers: Dict[str, Pub
         delivery.attempts = (delivery.attempts or 0) + 1
         db.commit()
         result = await _publish_to_channel(publishers, delivery.channel, view_for(post, delivery))
-        _record_result(db, post, delivery, result, datetime.utcnow())
+        _record_result(db, post, delivery, result, utc_now())
         outcome.results.append(result)
 
     failed = [d for d in deliveries if d.status != DeliveryStatus.PUBLISHED.value]
@@ -387,7 +388,7 @@ async def publish_post(db: Session, post: models.Post, publishers: Dict[str, Pub
         post.error = "; ".join(f"{_label(d)}: {d.error}" for d in failed)[:1000]
     else:
         post.status = PostStatus.PUBLISHED
-        post.published_at = datetime.utcnow()
+        post.published_at = utc_now()
         post.error = None
     db.commit()
     outcome.status = post.status.value
@@ -405,7 +406,7 @@ async def publish_due(
     """تشغيل واحد: يُبلَّغ عن العالقين، ثم يُنشر حتى per_run (الافتراضي PUBLISH_PER_RUN) منشوراً حان موعده.
     السقف اليومي لكل قناة على حدة (channel_daily_limit) ويُحسب من النشر الفعلي في آخر 24 ساعة؛ المنشور الذي
     بلغت إحدى قنواته سقفها يُترك approved لتشغيل لاحق ولا يعطّل منشورات القنوات الأخرى."""
-    now = now or datetime.utcnow()
+    now = now or utc_now()
     per_run = settings.PUBLISH_PER_RUN if per_run is None else per_run
     summary = RunSummary(dry_run=dry_run)
     summary.stale_post_ids = [] if dry_run else report_stale(db, now)

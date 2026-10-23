@@ -18,7 +18,7 @@
 """
 import argparse
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Dict, List, Optional
 
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from sqlalchemy import select
 from app import models
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.time import utc_now
 from app.models import PostApproval, PostStatus
 from app.services import post_publisher
 
@@ -141,7 +142,7 @@ def main(argv=None) -> int:
 
         missing = f"{settings.IMAGE_BASE_URL or 'https://hadjretbladi.com'}/ZZ999/1.jpg"
         seeds = build_seed_posts(image_url, args.video_url, args.with_failures, missing)
-        now = datetime.utcnow()
+        now = utc_now()
         for seed in seeds:
             seed["channel_ids"] = channel_ids_for(seed["platforms"])
             print(f"  {seed['n']:>2}. {seed['media_type']:<5} {seed['platforms']:<20} قنوات={seed['channel_ids']} {seed['description'][:40]}")

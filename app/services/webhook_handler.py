@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from pydantic import ValidationError
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.database import SessionLocal
+from app.core.time import utc_now
 from app.services import media
 from app.services.admin_command import is_import_command
 from app.services.import_report import ImportConfigError, format_report
@@ -194,7 +195,7 @@ def _yes_no(text: str) -> Optional[bool]:
 
 
 def _pending_query(db: Session, factory: models.Factory):
-    cutoff = datetime.utcnow() - PENDING_TTL
+    cutoff = utc_now() - PENDING_TTL
     return db.query(models.PendingMediaUpdate).filter(
         models.PendingMediaUpdate.factory_id == factory.id,
         models.PendingMediaUpdate.created_at >= cutoff,

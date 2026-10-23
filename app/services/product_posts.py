@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.core.config import settings
+from app.core.time import utc_now
 from app.models import DeliveryStatus, PostApproval, PostStatus
 from app.services.errors import InvalidInputError, NotFoundError
 from app.services.post_templates import build_caption
@@ -58,7 +59,7 @@ def create_ready_posts(
         if missing_skus:
             raise NotFoundError(f"منتجات غير موجودة لهذا المصنع: {', '.join(missing_skus)}")
 
-    now = datetime.utcnow()
+    now = utc_now()
     slots: List[Optional[datetime]] = [None] * len(products)
     if times and products:
         occupied = db.scalars(select(models.Post.scheduled_at).where(

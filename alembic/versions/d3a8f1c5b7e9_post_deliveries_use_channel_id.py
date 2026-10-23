@@ -16,7 +16,7 @@ Revision ID: d3a8f1c5b7e9
 Revises: c6f2a1d9e843
 """
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -58,7 +58,8 @@ def _ensure(bind, platform: str, remote_id: str, name: str, active: bool) -> int
     if found:
         return found
     bind.execute(channels.insert().values(
-        platform=platform, name=name, remote_id=remote_id, is_active=active, created_at=datetime.utcnow(),
+        platform=platform, name=name, remote_id=remote_id, is_active=active,
+        created_at=datetime.now(UTC).replace(tzinfo=None),
     ))
     return _find(bind, platform, remote_id)
 

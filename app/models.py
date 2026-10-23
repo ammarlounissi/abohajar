@@ -1,6 +1,4 @@
 import enum
-from datetime import datetime
-
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
     UniqueConstraint,
@@ -8,6 +6,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.time import utc_now
 
 
 class Channel(str, enum.Enum):
@@ -88,7 +87,7 @@ class Factory(Base):
     phone_number = Column(String(20), unique=True, index=True, nullable=False)
     address = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     products = relationship("Product", back_populates="factory")
     posts = relationship("Post", back_populates="factory")
@@ -107,7 +106,7 @@ class FactoryChatMessage(Base):
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
     prompt = Column(Text, nullable=False)
     response = Column(Text, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
 
     factory = relationship("Factory", back_populates="chat_messages")
 
@@ -122,7 +121,7 @@ class FactoryContact(Base):
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
     channel = Column(String(20), nullable=False)
     identifier = Column(String(100), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     factory = relationship("Factory", back_populates="contacts")
 
@@ -140,7 +139,7 @@ class SocialChannel(Base):
     name = Column(String(100), nullable=False)
     remote_id = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
 
     @property
     def label(self) -> str:
@@ -178,8 +177,8 @@ class Product(Base):
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False)
     factory = relationship("Factory", back_populates="products")
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 class Post(Base):
@@ -194,7 +193,7 @@ class Post(Base):
     description = Column(Text, nullable=True)
     status = Column(Enum(PostStatus), nullable=False, default=PostStatus.DRAFT)
     approval = Column(Enum(PostApproval), nullable=False, default=PostApproval.PENDING)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
     published_at = Column(DateTime, nullable=True)
 
     # --- النشر التلقائي (المرحلة الأولى) ---
@@ -252,7 +251,7 @@ class PublishReport(Base):
     __tablename__ = "publish_reports"
 
     id = Column(Integer, primary_key=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=True, index=True)
     platform = Column(String(30), nullable=True)
     kind = Column(String(20), nullable=False, default=ReportKind.UNKNOWN.value)
@@ -271,7 +270,7 @@ class Order(Base):
     quantity = Column(Float, default=1.0)
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     product = relationship("Product")
 
@@ -283,7 +282,7 @@ class ProcessedMessage(Base):
 
     id = Column(Integer, primary_key=True)
     message_id = Column(String(128), unique=True, index=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 
 class PendingMediaUpdate(Base):
@@ -299,4 +298,4 @@ class PendingMediaUpdate(Base):
     price = Column(Float, nullable=False)
     channel = Column(String(20), nullable=False, default=Channel.WHATSAPP.value)
     media_ref = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
