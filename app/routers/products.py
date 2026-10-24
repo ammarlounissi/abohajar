@@ -7,6 +7,7 @@ from app import schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import factories as factory_service
+from app.services import video_maker
 from app.services import products as product_service
 from app.services.meta import sync_product_to_meta, sync_products_in_background
 
@@ -28,6 +29,13 @@ def get_products(
     db: Session = Depends(get_db),
 ):
     return product_service.list_products(db, skip=skip, limit=limit, category_code=category_code, tag=tag)
+
+
+# قبل "/{sku}" كي لا يُفسَّر audio-files على أنه SKU
+@router.get("/audio-files", response_model=List[str], dependencies=admin_only)
+def list_audio_files():
+    """أسماء الملفات الصوتية المتاحة للدمج (من AUDIO_ROOT)."""
+    return video_maker.list_audio_files()
 
 
 @router.get("/admin", response_model=List[schemas.ProductResponse], dependencies=admin_only)
@@ -68,14 +76,16 @@ def create_product_video(
     duration: float = Query(7.0, ge=3, le=15, description="مدة الريلز بالثواني"),
     fit: Literal["blur", "crop"] = Query("blur", description="blur: الصورة كاملة فوق خلفية مموّهة، crop: ملء الإطار بالقص"),
     overwrite: bool = Query(False, description="استبدال فيديو موجود (القديم يُنقل إلى MEDIA_BACKUP_DIR)"),
+    audio: Optional[str] = Query(None, max_length=120, description="اسم ملف صوتي داخل AUDIO_ROOT لدمجه (اختياري)"),
     db: Session = Depends(get_db),
 ):
     """يبني ريلز MP4 عمودي (720×1280) من صور المنتج بـ ffmpeg ويحفظ رابطه في المنتج.
     دالة عادية (لا async) فيشغّلها FastAPI في خيط منفصل ولا تحجب باقي الطلبات."""
-    result = product_service.generate_product_video(db, sku, duration=duration, fit=fit, overwrite=overwrite)
+    result = product_service.generate_product_video(db, sku, duration=duration, fit=fit, overwrite=overwrite, audio=audio)
     return schemas.ProductVideoResponse(
         sku=result.sku, video_url=result.url, size_bytes=result.size_bytes,
         duration=result.duration, images_used=result.images_used, replaced=result.replaced,
+        audio=result.audio,
     )
 
 

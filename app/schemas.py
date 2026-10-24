@@ -272,6 +272,7 @@ class ProductVideoResponse(BaseModel):
     duration: float
     images_used: int
     replaced: bool
+    audio: Optional[str] = None
 
 
 MediaType = Literal["text", "image", "gallery", "reel"]

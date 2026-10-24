@@ -13,6 +13,7 @@
 """
 import logging
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -40,6 +41,10 @@ CROSSFADE = 0.5
 MAX_BYTES = 3 * 1024 * 1024
 FFMPEG_TIMEOUT = 300
 
+AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".ogg")
+_AUDIO_NAME_RE = re.compile(r"[\w][\w .()-]*")      # اسم ملف فقط: بلا شرطات مائلة ولا ..
+AUDIO_FADE_IN, AUDIO_FADE_OUT = 0.5, 1.0
+
 FIT_MODES = ("blur", "crop")             # blur: الصورة كاملة فوق خلفية مموّهة، crop: ملء الإطار بالقص
 
 
@@ -60,6 +65,7 @@ class VideoResult:
     duration: float
     images_used: int
     replaced: bool
+    audio: Optional[str] = None
 
 
 def public_video_url(sku: str, index: int = VIDEO_INDEX) -> str:
@@ -139,22 +145,63 @@ def build_filter_graph(count: int, duration: float, fit: str) -> str:
     return ";".join(parts)
 
 
-def _encode_args(crf: int) -> list:
+def list_audio_files() -> List[str]:
+    """أسماء ملفات الصوت المتاحة في AUDIO_ROOT (مرتبة)."""
+    root = settings.AUDIO_ROOT
+    if root is None or not root.is_dir():
+        return []
+    return sorted(
+        f.name for f in root.iterdir()
+        if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in AUDIO_EXTENSIONS
+    )
+
+
+def resolve_audio(name: str) -> Path:
+    """اسم ملف صوتي داخل AUDIO_ROOT -> مساره الكامل، مع منع اجتياز المجلد."""
+    root = settings.AUDIO_ROOT
+    if root is None:
+        raise InvalidInputError("AUDIO_ROOT غير مضبوط في الإعدادات")
+    if not _AUDIO_NAME_RE.fullmatch(name or "") or ".." in name:
+        raise InvalidInputError("اسم الملف الصوتي غير صالح (اسم ملف فقط بلا مسار)")
+    if Path(name).suffix.lower() not in AUDIO_EXTENSIONS:
+        raise InvalidInputError(f"صيغة الصوت يجب أن تكون إحدى: {', '.join(AUDIO_EXTENSIONS)}")
+    path = (root.resolve() / name).resolve()
+    if path.parent != root.resolve() or not path.is_file():
+        raise NotFoundError(f"الملف الصوتي غير موجود في مجلد الصوتيات: {name}")
+    return path
+
+
+def _encode_args(crf: int, with_audio: bool = False) -> list:
+    audio = ["-c:a", "aac", "-b:a", "96k", "-ar", "44100", "-ac", "2"] if with_audio else ["-an"]
     return [
         "-c:v", "libx264", "-preset", "slow", "-crf", str(crf),
         "-maxrate", "2200k", "-bufsize", "4400k",
-        "-pix_fmt", "yuv420p", "-profile:v", "main", "-an",
+        "-pix_fmt", "yuv420p", "-profile:v", "main", *audio,
         "-movflags", "+faststart", "-f", "mp4",
     ]
 
 
-def _run_ffmpeg(ffmpeg: str, images: List[Path], duration: float, fit: str, crf: int, output: Path) -> None:
+def _run_ffmpeg(
+    ffmpeg: str, images: List[Path], duration: float, fit: str, crf: int, output: Path,
+    audio: Optional[Path] = None,
+) -> None:
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     for image in images:
         command += ["-i", str(image)]
+    graph = build_filter_graph(len(images), duration, fit)
+    maps = ["-map", "[out]"]
+    if audio is not None:
+        # الصوت يتكرر إن كان أقصر من الفيديو ويُقص عند نهايته (-t)، مع ظهور تدريجي واختفاء تدريجي
+        command += ["-stream_loop", "-1", "-i", str(audio)]
+        fade_out_start = max(0.0, duration - AUDIO_FADE_OUT)
+        graph += (
+            f";[{len(images)}:a]afade=t=in:st=0:d={AUDIO_FADE_IN},"
+            f"afade=t=out:st={fade_out_start:.2f}:d={AUDIO_FADE_OUT}[aout]"
+        )
+        maps += ["-map", "[aout]"]
     command += [
-        "-filter_complex", build_filter_graph(len(images), duration, fit),
-        "-map", "[out]", "-t", f"{duration:.2f}", *_encode_args(crf), str(output),
+        "-filter_complex", graph,
+        *maps, "-t", f"{duration:.2f}", *_encode_args(crf, audio is not None), str(output),
     ]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT, check=False)
@@ -179,6 +226,7 @@ def _archive_existing(sku: str, path: Path) -> bool:
 
 def create_product_video(
     sku: str, *, duration: float = DEFAULT_DURATION, fit: str = "blur", overwrite: bool = False,
+    audio: Optional[str] = None,
 ) -> VideoResult:
     """يبني {SKU}/1.mp4 من صور المنتج. لا يلمس قاعدة البيانات.
     NotFoundError: لا صور للمنتج. InvalidInputError: SKU أو مدخل غير صالح، أو فيديو موجود ولم يُطلب الاستبدال.
@@ -191,6 +239,8 @@ def create_product_video(
         raise InvalidInputError(f"مدة الفيديو يجب أن تكون بين {MIN_DURATION:g} و{MAX_DURATION:g} ثانية")
     if settings.MEDIA_ROOT is None:
         raise InvalidInputError("MEDIA_ROOT غير مضبوط")
+
+    audio_path = resolve_audio(audio) if audio else None
 
     images = list_source_images(sku)[:MAX_IMAGES]
     if not images:
@@ -207,10 +257,10 @@ def create_product_video(
     # نبني في ملف مؤقت ثم نستبدل، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً (.tmp مُتجاهَل)
     tmp = target.parent / f".video-{uuid.uuid4().hex}.tmp"
     try:
-        _run_ffmpeg(ffmpeg, images, duration, fit, 26, tmp)
+        _run_ffmpeg(ffmpeg, images, duration, fit, 26, tmp, audio_path)
         if tmp.stat().st_size > MAX_BYTES:                 # إعادة بجودة أقل مرة واحدة
             logger.info("%s video is %d bytes, re-encoding smaller", sku, tmp.stat().st_size)
-            _run_ffmpeg(ffmpeg, images, duration, fit, 31, tmp)
+            _run_ffmpeg(ffmpeg, images, duration, fit, 31, tmp, audio_path)
         size = tmp.stat().st_size
         if size > MAX_BYTES:
             raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
@@ -223,5 +273,5 @@ def create_product_video(
     logger.info("Created video for %s (%d images, %d bytes, replaced=%s)", sku, len(images), size, replaced)
     return VideoResult(
         sku=sku, path=target, url=public_video_url(sku), size_bytes=size,
-        duration=duration, images_used=len(images), replaced=replaced,
+        duration=duration, images_used=len(images), replaced=replaced, audio=audio,
     )

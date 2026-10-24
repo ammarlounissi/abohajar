@@ -325,6 +325,16 @@ curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
 الفيديو القديم عند `overwrite=true` يُنقل إلى `MEDIA_BACKUP_DIR` ولا يُحذف. الفيديو لا يدخل كتالوج ميتا ولا يغيّر `sync_status`.
 `video_url` يظهر في `GET /api/products` و`/api/products/{sku}` ليستعمله فيد Next.js (`autoplay muted loop playsinline` و`poster` = `primary_media_url`).
 
+**دمج صوت:** ضع ملفات الصوت (mp3/m4a/aac/wav/ogg) في مجلد **خارج `MEDIA_ROOT`** (مثل `/home/ammar/media/audio`) واضبطه في `.env`:
+`AUDIO_ROOT=/home/ammar/media/audio`. لا يحتاج Nginx ولا Syncthing أن «يلتقطه»: ffmpeg يقرؤه من القرص ولا يُخدم إلا الـ MP4 الناتج.
+```bash
+python -m scripts.make_videos --list-audio
+python -m scripts.make_videos B001 --overwrite --audio music1.mp3
+curl -X POST -H "X-API-Key: $ADMIN_API_KEY" "https://api.hadjretbladi.com/api/products/by-sku/B001/video?overwrite=true&audio=music1.mp3"
+```
+الصوت يتكرر إن كان أقصر من الفيديو ويُقص عند نهايته مع ظهور/اختفاء تدريجي (AAC 96kbps). `GET /api/products/audio-files` يعرض المتاح.
+تنبيه: الفيد على الموقع يشغّل الفيديو صامتًا (`muted`)، فالصوت مفيد أساسًا عند نشر الريلز على إنستغرام وفيسبوك.
+
 الكود: `app/services/video_maker.py` (ffmpeg فقط، لا قاعدة بيانات) و`products.generate_product_video` (يحفظ الرابط).
 
 ---

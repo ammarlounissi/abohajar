@@ -5,6 +5,8 @@
     python -m scripts.make_videos --all                 # كل المنتجات التي لا فيديو لها
     python -m scripts.make_videos --all --overwrite     # إعادة بناء الكل (القديم يُنقل إلى MEDIA_BACKUP_DIR)
     python -m scripts.make_videos B001 --duration 8 --fit crop
+    python -m scripts.make_videos B001 --audio music1.mp3   # دمج صوت من AUDIO_ROOT
+    python -m scripts.make_videos --list-audio              # الملفات الصوتية المتاحة
 
 الخيار --dry-run يعرض ما سيُبنى دون كتابة شيء. يعيد الرمز 1 إن فشل أي منتج.
 """
@@ -25,9 +27,15 @@ def main(argv=None) -> int:
     parser.add_argument("--duration", type=float, default=video_maker.DEFAULT_DURATION, help="المدة بالثواني (الافتراضي 7)")
     parser.add_argument("--fit", choices=video_maker.FIT_MODES, default="blur",
                         help="blur: الصورة كاملة فوق خلفية مموّهة (الافتراضي)، crop: ملء الإطار بالقص")
+    parser.add_argument("--audio", metavar="FILE", help="اسم ملف صوتي داخل AUDIO_ROOT يُدمج في الفيديو")
+    parser.add_argument("--list-audio", action="store_true", help="اعرض الملفات الصوتية المتاحة وانتهِ")
     parser.add_argument("--dry-run", action="store_true", help="اعرض فقط ما سيُبنى")
     args = parser.parse_args(argv)
 
+    if args.list_audio:
+        files = video_maker.list_audio_files()
+        print("\n".join(files) if files else "لا ملفات صوتية (تحقق من AUDIO_ROOT)")
+        return 0
     if bool(args.skus) == args.all:
         parser.error("حدّد رموز منتجات أو --all (واحداً منهما)")
 
@@ -49,7 +57,7 @@ def main(argv=None) -> int:
                     print(f"[dry-run] {sku}: {n} صورة -> {video_maker.public_video_url(sku)}")
                     continue
                 result = product_service.generate_product_video(
-                    db, sku, duration=args.duration, fit=args.fit, overwrite=args.overwrite,
+                    db, sku, duration=args.duration, fit=args.fit, overwrite=args.overwrite, audio=args.audio,
                 )
                 done += 1
                 print(f"✅ {sku}: {result.images_used} صورة، {result.size_bytes / 1024:.0f}KB -> {result.url}")

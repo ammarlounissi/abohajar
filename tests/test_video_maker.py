@@ -44,6 +44,11 @@ class VideoMakerBase(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.folder = self.root / "B" / "B001"
         self.folder.mkdir(parents=True)
+        self.audio_root = Path(tmp.name) / "audio"
+        self.audio_root.mkdir()
+        patcher = mock.patch.object(settings, "AUDIO_ROOT", self.audio_root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 class FilterGraphTests(unittest.TestCase):
@@ -97,6 +102,29 @@ class ValidationTests(VideoMakerBase):
                 video_maker.create_product_video("B001")
 
 
+class AudioResolveTests(VideoMakerBase):
+    def test_lists_only_audio_files(self):
+        for name in ("b.mp3", "a.wav", "notes.txt", ".hidden.mp3"):
+            (self.audio_root / name).write_bytes(b"x")
+        self.assertEqual(video_maker.list_audio_files(), ["a.wav", "b.mp3"])
+
+    def test_rejects_paths_bad_extension_and_missing(self):
+        (self.audio_root / "ok.mp3").write_bytes(b"x")
+        (self.root / "secret.mp3").write_bytes(b"x")
+        for bad in ("../secret.mp3", "/etc/passwd", "sub/ok.mp3", "..", "ok.exe"):
+            with self.assertRaises(InvalidInputError, msg=bad):
+                video_maker.resolve_audio(bad)
+        with self.assertRaises(NotFoundError):
+            video_maker.resolve_audio("missing.mp3")
+        self.assertEqual(video_maker.resolve_audio("ok.mp3"), (self.audio_root / "ok.mp3").resolve())
+
+    def test_audio_root_unset(self):
+        with mock.patch.object(settings, "AUDIO_ROOT", None):
+            self.assertEqual(video_maker.list_audio_files(), [])
+            with self.assertRaises(InvalidInputError):
+                video_maker.resolve_audio("a.mp3")
+
+
 @unittest.skipUnless(HAS_FFMPEG, "ffmpeg غير مثبت")
 class RenderTests(VideoMakerBase):
     def test_builds_vertical_h264_reel_from_mixed_images(self):
@@ -125,6 +153,21 @@ class RenderTests(VideoMakerBase):
         stream = next(s for s in probe(result.path)["streams"] if s["codec_type"] == "video")
         self.assertEqual((stream["width"], stream["height"]), (720, 1280))
         self.assertAlmostEqual(float(probe(result.path)["format"]["duration"]), 4.0, delta=0.1)
+
+    def test_merges_short_audio_looped_to_video_length(self):
+        make_image(self.folder / "1.jpg", (600, 600))
+        # صوت أقصر (2 ثانية) من الفيديو (4): يجب أن يتكرر لا أن ينتهي مبكراً
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+             str(self.audio_root / "tone.wav")], check=True,
+        )
+        result = video_maker.create_product_video("B001", duration=4, audio="tone.wav")
+        self.assertEqual(result.audio, "tone.wav")
+        info = probe(result.path)
+        kinds = {s["codec_type"]: s for s in info["streams"]}
+        self.assertEqual(kinds["audio"]["codec_name"], "aac")
+        self.assertAlmostEqual(float(info["format"]["duration"]), 4.0, delta=0.15)
+        self.assertAlmostEqual(float(kinds["audio"]["duration"]), 4.0, delta=0.15)
 
     def test_existing_video_needs_overwrite_and_is_archived(self):
         make_image(self.folder / "1.jpg", (600, 600))
