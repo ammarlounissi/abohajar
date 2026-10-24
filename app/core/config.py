@@ -122,9 +122,6 @@ class Settings:
     # مثل telegram:123456789,whatsapp:213550000000. يُضاف إليها ADMIN_PHONE_NUMBERS لواتساب.
     ADMIN_CONTACTS = _get_contacts("ADMIN_CONTACTS")
 
-    # المجلدات
-    STATIC_DIR = BASE_DIR / "static"
-    UPLOADS_DIR = STATIC_DIR / "uploads" / "factories"   # قديم: لم يعد يُستعمل لصور المنتجات
 
     REQUIRED = (
         "VERIFY_TOKEN",

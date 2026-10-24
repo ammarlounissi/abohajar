@@ -4,15 +4,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.routers import chat, factories, posts, products, public_media, social_channels, webhook
 from app.services import errors
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
-settings.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -54,8 +51,6 @@ app.include_router(posts.router)
 app.include_router(public_media.router)
 app.include_router(social_channels.router)
 app.include_router(webhook.router)
-
-app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 
 @app.get("/health")
