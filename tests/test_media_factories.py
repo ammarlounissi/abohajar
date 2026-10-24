@@ -110,7 +110,7 @@ class FactoryMediaLocationTests(unittest.TestCase):
         self.assertEqual(media_library.library_dir(OWNER), self.factory_root / "4" / "library")
 
     def test_videos_follow_the_factory(self):
-        if not video_maker.shutil.which("ffmpeg"):
+        if not video_maker.ffmpeg_tools.find_tool("ffmpeg"):
             self.skipTest("ffmpeg غير مثبت")
         media.save_main_image("ST012", jpeg_bytes(), OTHER)
         media.save_main_image("B001", jpeg_bytes(), OWNER)

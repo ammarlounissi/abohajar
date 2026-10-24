@@ -97,7 +97,7 @@ class ValidationTests(VideoMakerBase):
 
     def test_missing_ffmpeg(self):
         make_image(self.folder / "1.jpg", (100, 100))
-        with mock.patch("app.services.video_maker.shutil.which", return_value=None):
+        with mock.patch("app.services.ffmpeg_tools.find_tool", return_value=None):
             with self.assertRaises(video_maker.VideoToolMissingError):
                 video_maker.create_product_video("B001")
 
@@ -196,12 +196,12 @@ class RenderTests(VideoMakerBase):
         real_indexes = video_maker.video_indexes
         calls = []
 
-        def racing(sku):
+        def racing(sku, factory_id=None):
             calls.append(1)
             if len(calls) == 1:                    # الطلب الآخر يحجز الرقم 1 بعد أن قرأناه فارغاً
                 (self.folder / "1.mp4").write_bytes(b"other request")
                 return []
-            return real_indexes(sku)
+            return real_indexes(sku, factory_id)
 
         with mock.patch.object(video_maker, "video_indexes", side_effect=racing):
             index, target = video_maker._publish("B001", tmp)

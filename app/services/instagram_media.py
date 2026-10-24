@@ -3,7 +3,6 @@ import asyncio
 import hashlib
 import io
 import os
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -14,6 +13,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import settings
 from app.models import ReportKind
+from app.services import ffmpeg_tools
 from app.services.social.base import PublishError, is_http_url
 
 MIN_ASPECT_RATIO = 4 / 5
@@ -99,7 +99,7 @@ def _run_media_command(command: list[str], timeout: int, failure_code: str) -> s
 
 
 def _video_dimensions(path: Path) -> tuple[int, int]:
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = ffmpeg_tools.find_tool("ffprobe")
     if not ffprobe:
         raise PublishError(ReportKind.UNKNOWN, "instagram_video_tools_missing:ffprobe")
     result = _run_media_command(
@@ -120,7 +120,7 @@ def _video_dimensions(path: Path) -> tuple[int, int]:
 
 
 def _transcode_reel(source: Path, output: Path) -> None:
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_tools.find_tool("ffmpeg")
     if not ffmpeg:
         raise PublishError(ReportKind.UNKNOWN, "instagram_video_tools_missing:ffmpeg")
 

@@ -15,7 +15,6 @@
 import logging
 import os
 import re
-import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -23,7 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from app.core.config import settings
-from app.services import media
+from app.services import ffmpeg_tools, media
 from app.services.errors import InvalidInputError, NotFoundError, ServiceError
 
 logger = logging.getLogger(__name__)
@@ -67,17 +66,17 @@ class VideoResult:
     audio: Optional[str] = None
 
 
-def public_video_url(sku: str, index: int) -> str:
-    return f"{settings.IMAGE_BASE_URL}/{sku}/{index}{VIDEO_EXT}"
+def public_video_url(sku: str, index: int, factory_id: Optional[int] = None) -> str:
+    return media.public_media_url(sku, f"{index}{VIDEO_EXT}", factory_id)
 
 
-def video_path(sku: str, index: int) -> Path:
-    return media.product_dir(sku) / f"{index}{VIDEO_EXT}"
+def video_path(sku: str, index: int, factory_id: Optional[int] = None) -> Path:
+    return media.product_dir(sku, factory_id) / f"{index}{VIDEO_EXT}"
 
 
-def video_indexes(sku: str) -> List[int]:
+def video_indexes(sku: str, factory_id: Optional[int] = None) -> List[int]:
     """أرقام الفيديوهات الموجودة فعلاً (1.mp4 و2.mp4...) بالترتيب، سواء بناها النظام أو رُفعت يدوياً."""
-    folder = media.product_dir(sku)
+    folder = media.product_dir(sku, factory_id)
     if not folder.is_dir():
         return []
     found = {
@@ -87,13 +86,13 @@ def video_indexes(sku: str) -> List[int]:
     return sorted(found)
 
 
-def has_video(sku: str) -> bool:
-    return bool(video_indexes(sku))
+def has_video(sku: str, factory_id: Optional[int] = None) -> bool:
+    return bool(video_indexes(sku, factory_id))
 
 
-def list_source_images(sku: str) -> List[Path]:
+def list_source_images(sku: str, factory_id: Optional[int] = None) -> List[Path]:
     """صور المنتج بترتيب أرقامها (1 ثم 2 ...). ملف واحد لكل رقم، وبلا ملفات مخفية أو تعارضات مزامنة."""
-    folder = media.product_dir(sku)
+    folder = media.product_dir(sku, factory_id)
     if not folder.is_dir():
         return []
     by_index: dict = {}
@@ -226,6 +225,7 @@ def _run_ffmpeg(
 
 def create_product_video(
     sku: str, *, duration: float = DEFAULT_DURATION, fit: str = "blur", audio: Optional[str] = None,
+    factory_id: Optional[int] = None,
 ) -> VideoResult:
     """يبني فيديو جديداً في آخر تسلسل فيديوهات المنتج ({SKU}/{n}.mp4) دون المساس بأي فيديو قائم.
     لا يلمس قاعدة البيانات. NotFoundError: لا صور للمنتج. InvalidInputError: مدخل غير صالح.
@@ -236,20 +236,22 @@ def create_product_video(
         raise InvalidInputError(f"طريقة الملاءمة يجب أن تكون إحدى: {', '.join(FIT_MODES)}")
     if not (MIN_DURATION <= duration <= MAX_DURATION):
         raise InvalidInputError(f"مدة الفيديو يجب أن تكون بين {MIN_DURATION:g} و{MAX_DURATION:g} ثانية")
-    if settings.MEDIA_ROOT is None:
+    if media.media_root_for(factory_id) is None:
         raise InvalidInputError("MEDIA_ROOT غير مضبوط")
 
     audio_path = resolve_audio(audio) if audio else None
 
-    images = list_source_images(sku)[:MAX_IMAGES]
+    images = list_source_images(sku, factory_id)[:MAX_IMAGES]
     if not images:
         raise NotFoundError("لا توجد صور لهذا المنتج لبناء فيديو منها")
 
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_tools.find_tool("ffmpeg")
     if not ffmpeg:
-        raise VideoToolMissingError("ffmpeg غير مثبت على الخادم (sudo apt install ffmpeg)")
+        raise VideoToolMissingError(
+            "ffmpeg غير موجود للخدمة. ثبّته (sudo apt install ffmpeg) أو حدّد مساره في .env: FFMPEG_BIN=/usr/bin/ffmpeg"
+        )
 
-    folder = media.product_dir(sku)
+    folder = media.product_dir(sku, factory_id)
     # نبني في ملف مؤقت ثم ننشره باسمه النهائي، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً (.tmp مُتجاهَل)
     tmp = folder / f".video-{uuid.uuid4().hex}.tmp"
     try:
@@ -260,24 +262,24 @@ def create_product_video(
         size = tmp.stat().st_size
         if size > MAX_BYTES:
             raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
-        index, target = _publish(sku, tmp)
+        index, target = _publish(sku, tmp, factory_id)
     finally:
         tmp.unlink(missing_ok=True)
 
     logger.info("Created video %s/%d.mp4 (%d images, %d bytes)", sku, index, len(images), size)
     return VideoResult(
-        sku=sku, path=target, url=public_video_url(sku, index), size_bytes=size,
+        sku=sku, path=target, url=public_video_url(sku, index, factory_id), size_bytes=size,
         duration=duration, images_used=len(images), index=index, audio=audio,
     )
 
 
-def _publish(sku: str, tmp: Path) -> tuple:
+def _publish(sku: str, tmp: Path, factory_id: Optional[int] = None) -> tuple:
     """ينشر الملف المؤقت باسم {أول رقم فارغ بعد آخر فيديو}.mp4. os.link يفشل إن وُجد الهدف،
     فلا يستبدل أي ملف حتى لو بنى طلبان متزامنان فيديو للمنتج نفسه (يعيد المحاولة برقم أعلى)."""
     for _ in range(10):
-        indexes = video_indexes(sku)
+        indexes = video_indexes(sku, factory_id)
         index = (indexes[-1] if indexes else 0) + 1
-        target = video_path(sku, index)
+        target = video_path(sku, index, factory_id)
         try:
             os.link(tmp, target)
         except FileExistsError:
