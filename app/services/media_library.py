@@ -58,13 +58,22 @@ def add_factory_media(
     return item
 
 
+LIBRARY_DIRNAME = "library"
+
+
+def library_dir(factory_id: int) -> Path:
+    """مجلد المكتبة العامة للمصنع (وسائط غير مرتبطة بمنتج): {FACTORY_MEDIA_ROOT}/{factory_id}/library.
+    منفصل عن مجلدات الفئات/المنتجات التي بجواره. يصلح لكل المصانع بما فيها مصنع صاحب المشروع."""
+    return settings.FACTORY_MEDIA_ROOT / str(int(factory_id)) / LIBRARY_DIRNAME
+
+
 def factory_media_file_path(factory_id: int, filename: str) -> Optional[Path]:
-    """مسار ملف محفوظ، مع منع اجتياز مجلد المصنع."""
+    """مسار ملف محفوظ في مكتبة المصنع، مع منع اجتياز المجلد."""
     if not _SAVED_FILENAME.fullmatch(filename):
         return None
-    path = (settings.FACTORY_MEDIA_ROOT / str(factory_id) / filename).resolve()
-    root = settings.FACTORY_MEDIA_ROOT.resolve()
-    if path.parent != (root / str(factory_id)).resolve():
+    folder = library_dir(factory_id).resolve()
+    path = (folder / filename).resolve()
+    if path.parent != folder:
         return None
     return path
 
@@ -90,7 +99,7 @@ def upload_factory_media(
     if content_type and content_type not in accepted_content_types:
         raise InvalidInputError("نوع محتوى الملف لا يتوافق مع امتداده")
 
-    directory = settings.FACTORY_MEDIA_ROOT / str(factory.id)
+    directory = library_dir(factory.id)
     directory.mkdir(parents=True, exist_ok=True)
     for _ in range(5):
         saved_filename = f"{uuid.uuid4().hex}{extension}"

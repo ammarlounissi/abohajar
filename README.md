@@ -145,7 +145,7 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | المسار | الوظيفة |
 | --- | --- |
 | `POST /api/factories/{factory_id}/media` | إضافة وسيط بصيغة JSON: `media_type` (`image` أو `video`)، `url` (رابط HTTP/HTTPS)، و`description` اختياري |
-| `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `FACTORY_MEDIA_ROOT/{factory_id}` (الافتراضي `/home/ammar/media/factory/{factory_id}`)، ويُقبل JPG/JPEG/PNG/WEBP/GIF/ICO/SVG أو MP4/MOV/WEBM حتى 100 ميغابايت |
+| `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `FACTORY_MEDIA_ROOT/{factory_id}/library` (الافتراضي `/home/ammar/media/factory/{factory_id}/library`)، ويُقبل JPG/JPEG/PNG/WEBP/GIF/ICO/SVG أو MP4/MOV/WEBM حتى 100 ميغابايت |
 | `GET /api/factories/{factory_id}/media` | عرض وسائط المصنع، مع `?media_type=image` أو `?media_type=video`، و`skip` و`limit` للتصفح |
 | `DELETE /api/factories/{factory_id}/media/{media_id}` | حذف وسيط من مكتبة المصنع المحدد |
 

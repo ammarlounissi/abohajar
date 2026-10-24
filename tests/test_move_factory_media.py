@@ -29,7 +29,7 @@ class MoveFactoryMediaTests(unittest.TestCase):
         moves, notes = m.plan_moves(self.media, self.new)
         self.assertEqual(
             sorted((s.relative_to(self.media).as_posix(), d.relative_to(self.media).as_posix()) for s, d in moves),
-            [("3/" + NAME, "factory/3/" + NAME), ("3/" + NAME2, "factory/3/" + NAME2), ("7/" + NAME, "factory/7/" + NAME)],
+            [("3/" + NAME, "factory/3/library/" + NAME), ("3/" + NAME2, "factory/3/library/" + NAME2), ("7/" + NAME, "factory/7/library/" + NAME)],
         )
         self.assertTrue(any("notes.txt" in n for n in notes))
 
@@ -37,21 +37,21 @@ class MoveFactoryMediaTests(unittest.TestCase):
         moves, _ = m.plan_moves(self.media, self.new)
         moved, problems = m.apply_moves(moves)
         self.assertEqual((moved, problems), (3, []))
-        self.assertEqual((self.new / "3" / NAME).read_bytes(), b"one")
-        self.assertEqual((self.new / "7" / NAME).read_bytes(), b"seven")
+        self.assertEqual((self.new / "3" / "library" / NAME).read_bytes(), b"one")
+        self.assertEqual((self.new / "7" / "library" / NAME).read_bytes(), b"seven")
         self.assertFalse((self.media / "7").exists())              # فرغ فحُذف
         self.assertTrue((self.media / "3" / "notes.txt").exists())  # فيه ملف آخر فبقي
         self.assertTrue((self.media / "products" / "B" / "B001" / "1.jpg").exists())
         self.assertTrue((self.media / "audio" / "a.mp3").exists())
 
     def test_never_overwrites_existing_destination(self):
-        (self.new / "7").mkdir(parents=True)
-        (self.new / "7" / NAME).write_bytes(b"already there")
+        (self.new / "7" / "library").mkdir(parents=True)
+        (self.new / "7" / "library" / NAME).write_bytes(b"already there")
         moves, _ = m.plan_moves(self.media, self.new)
         moved, problems = m.apply_moves(moves)
         self.assertEqual(moved, 2)
         self.assertEqual(len(problems), 1)
-        self.assertEqual((self.new / "7" / NAME).read_bytes(), b"already there")
+        self.assertEqual((self.new / "7" / "library" / NAME).read_bytes(), b"already there")
         self.assertEqual((self.media / "7" / NAME).read_bytes(), b"seven")
 
     def test_running_twice_is_a_noop(self):

@@ -1,4 +1,4 @@
-"""نقل وسائط المصانع القديمة من  {media}/{factory_id}/  إلى المجلد المخصص  FACTORY_MEDIA_ROOT (factory/{factory_id}/).
+"""نقل وسائط المصانع القديمة من  {media}/{factory_id}/  إلى المكتبة المخصصة  FACTORY_MEDIA_ROOT/{factory_id}/library/.
 
 كانت تُحفظ في مجلدات أرقام بجانب products مباشرة. الروابط العامة (/api/media/factories/{id}/{file})
 لا تتغير ولا يُلمس سجل القاعدة، فالنقل على القرص فقط.
@@ -38,7 +38,7 @@ def plan_moves(old_root: Path, new_root: Path) -> Tuple[List[Tuple[Path, Path]],
             continue
         for f in sorted(folder.iterdir()):
             if f.is_file() and not f.is_symlink() and _LIBRARY_FILE.fullmatch(f.name):
-                moves.append((f, new_root / folder.name / f.name))
+                moves.append((f, new_root / folder.name / "library" / f.name))
             else:
                 notes.append(f"تُرك كما هو: {f}")
     return moves, notes
@@ -73,7 +73,7 @@ def main(argv=None) -> int:
         print("❌ حدّد --old-root (المجلد القديم غير معروف أو غير موجود)")
         return 1
     new_root = settings.FACTORY_MEDIA_ROOT
-    print(f"من: {old_root}/{{رقم المصنع}}/   إلى: {new_root}/{{رقم المصنع}}/")
+    print(f"من: {old_root}/{{رقم المصنع}}/   إلى: {new_root}/{{رقم المصنع}}/library/")
 
     moves, notes = plan_moves(old_root, new_root)
     for note in notes:

@@ -117,7 +117,7 @@ class FactoryMediaLibraryTests(unittest.TestCase):
             self.assertEqual(media["media_type"], "image")
             self.assertEqual(media["description"], "صورة المصنع")
             self.assertTrue(media["url"].startswith("https://api.example.test/api/media/factories/1/"))
-            stored_path = Path(temp_dir) / "1" / media["url"].rsplit("/", 1)[-1]
+            stored_path = Path(temp_dir) / "1" / "library" / media["url"].rsplit("/", 1)[-1]
             self.assertEqual(stored_path.read_bytes(), b"image bytes")
 
             served = self.client.get(media["url"].replace("https://api.example.test", ""))
@@ -202,8 +202,8 @@ class FactoryMediaLibraryTests(unittest.TestCase):
                     "app.services.media_library.uuid.uuid4",
                     side_effect=[mock.Mock(hex=existing_filename), mock.Mock(hex=replacement_filename)],
                 ):
-            factory_dir = Path(temp_dir) / "1"
-            factory_dir.mkdir()
+            factory_dir = Path(temp_dir) / "1" / "library"
+            factory_dir.mkdir(parents=True)
             existing_file = factory_dir / f"{existing_filename}.jpg"
             existing_file.write_bytes(b"existing media")
 
