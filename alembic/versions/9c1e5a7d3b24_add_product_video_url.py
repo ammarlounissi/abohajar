@@ -14,10 +14,17 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _has_column() -> bool:
+    columns = sa.inspect(op.get_bind()).get_columns("products")
+    return any(c["name"] == "video_url" for c in columns)
+
+
 def upgrade() -> None:
-    # عمود جديد قابل للفراغ: لا يلمس البيانات الحالية
-    op.add_column("products", sa.Column("video_url", sa.String(length=500), nullable=True))
+    # آمن إن كان العمود موجوداً مسبقاً (أُنشئ يدوياً أو بتشغيل سابق)
+    if not _has_column():
+        op.add_column("products", sa.Column("video_url", sa.String(length=500), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("products", "video_url")
+    if _has_column():
+        op.drop_column("products", "video_url")
