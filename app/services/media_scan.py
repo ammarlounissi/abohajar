@@ -10,7 +10,7 @@ import io
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.services import media
 
@@ -109,7 +109,7 @@ class CatalogBuild:
     csv_without_images: List[str] = field(default_factory=list)
 
 
-def build_records(scan: ScanResult, rows: Dict[str, dict]) -> CatalogBuild:
+def build_records(scan: ScanResult, rows: Dict[str, dict], factory_id: Optional[int] = None) -> CatalogBuild:
     """يدمج نتيجة الفحص مع CSV. لا ينشأ منتج إلا إن توفر له صورة واحدة على الأقل
     (حقل الصورة إلزامي في القاعدة وفي كتالوج ميتا) سطر في CSV (العنوان والسعر)."""
     build = CatalogBuild()
@@ -118,7 +118,7 @@ def build_records(scan: ScanResult, rows: Dict[str, dict]) -> CatalogBuild:
         if row is None:
             build.images_without_csv.append(sku)
             continue
-        urls = [media.public_image_url(sku, ext, i) for i, ext in indexes]
+        urls = [media.public_image_url(sku, ext, i, factory_id) for i, ext in indexes]
         build.records.append({
             "sku": sku,
             "title": row["title"],

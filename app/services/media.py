@@ -3,6 +3,15 @@
 البنية:  {MEDIA_ROOT}/{الفئة}/{SKU}/{الرقم}.{الامتداد}      مثل  B/B001/1.jpg
 الفئة = الحروف في بداية الـ SKU (B001 -> B، PTK012 -> PTK).
 
+موقع الوسائط يُحسب من المصنع صاحب المنتج (factory_id):
+  - مصنع صاحب المشروع (DEFAULT_FACTORY_ID) أو factory_id=None: المسار والرابط القديمان كما هما حرفياً
+        القرص  {MEDIA_ROOT}/{الفئة}/{SKU}/        الرابط  {IMAGE_BASE_URL}/{SKU}/{n}.{ext}   (يخدمه Nginx)
+  - أي مصنع آخر:
+        القرص  {FACTORY_MEDIA_ROOT}/{factory_id}/{الفئة}/{SKU}/
+        الرابط {BASE_URL}/api/media/factories/{factory_id}/{SKU}/{n}.{ext}                  (يخدمه FastAPI)
+    (لاحقاً: مصنع بدومين خاص يخدمه Nginx، انظر ARCHITECTURE.md)
+إن لم يُضبط DEFAULT_FACTORY_ID فكل المصانع تعامل بالسلوك القديم.
+
 الرابط العام قصير:  {IMAGE_BASE_URL}/{SKU}/{الرقم}.{الامتداد}     مثل  https://hadjretbladi.com/B001/22.jpg
 (Nginx يحوّله إلى {MEDIA_ROOT}/B/B001/22.jpg). شكل الرابط يُبنى في دالة واحدة هي public_image_url،
 وكتالوج ميتا يعتمد عليه، فلا يُبنى في مكان آخر.
@@ -43,24 +52,44 @@ def is_valid_media_sku(sku: str) -> bool:
     return bool(_SKU_PATH_RE.fullmatch(sku or ""))
 
 
-def product_dir(sku: str) -> Path:
-    """مجلد المنتج {MEDIA_ROOT}/{CATEGORY}/{SKU}. لا ينشئه."""
+def is_owner_factory(factory_id: Optional[int]) -> bool:
+    """مصنع صاحب المشروع (يحتفظ بالمسارات والروابط القصيرة القديمة)."""
+    default = settings.DEFAULT_FACTORY_ID
+    return factory_id is None or default is None or factory_id == default
+
+
+def media_root_for(factory_id: Optional[int] = None) -> Path:
+    """جذر وسائط المصنع: MEDIA_ROOT لصاحب المشروع، وإلا FACTORY_MEDIA_ROOT/{factory_id}."""
+    if is_owner_factory(factory_id):
+        return settings.MEDIA_ROOT
+    return settings.FACTORY_MEDIA_ROOT / str(int(factory_id))
+
+
+def product_dir(sku: str, factory_id: Optional[int] = None) -> Path:
+    """مجلد المنتج {جذر المصنع}/{CATEGORY}/{SKU}. لا ينشئه."""
     category = category_of(sku)
-    root = settings.MEDIA_ROOT.resolve()
+    root = media_root_for(factory_id).resolve()
     path = (root / category / sku).resolve()
     if root not in path.parents:          # حماية إضافية من path traversal
         raise InvalidSkuError(sku)
     return path
 
 
-def public_image_url(sku: str, ext: str, index: int = MAIN_IMAGE_INDEX) -> str:
+def public_media_url(sku: str, filename: str, factory_id: Optional[int] = None) -> str:
+    """الرابط العام لملف داخل مجلد المنتج (صورة أو فيديو). الشكل يُبنى هنا فقط."""
+    if is_owner_factory(factory_id):
+        return f"{settings.IMAGE_BASE_URL}/{sku}/{filename}"
+    return f"{settings.BASE_URL}/api/media/factories/{int(factory_id)}/{sku}/{filename}"
+
+
+def public_image_url(sku: str, ext: str, index: int = MAIN_IMAGE_INDEX, factory_id: Optional[int] = None) -> str:
     """ext بنقطة كما في الملف الفعلي، مثل '.jpg'."""
-    return f"{settings.IMAGE_BASE_URL}/{sku}/{index}{ext}"
+    return public_media_url(sku, f"{index}{ext}", factory_id)
 
 
-def existing_image_ext(sku: str, index: int = MAIN_IMAGE_INDEX) -> Optional[str]:
+def existing_image_ext(sku: str, index: int = MAIN_IMAGE_INDEX, factory_id: Optional[int] = None) -> Optional[str]:
     """امتداد الصورة الموجودة فعلاً على القرص (كما كُتب في اسم الملف)، أو None."""
-    folder = product_dir(sku)
+    folder = product_dir(sku, factory_id)
     if not folder.is_dir():
         return None
     for f in sorted(folder.iterdir()):
@@ -74,9 +103,9 @@ def _is_real_file(path: Path) -> bool:
     return not path.name.startswith(".") and path.suffix != ".tmp"
 
 
-def has_media(sku: str) -> bool:
+def has_media(sku: str, factory_id: Optional[int] = None) -> bool:
     """هل لمجلد المنتج وجود فعلي (مجلد وفيه ملف واحد على الأقل)؟"""
-    folder = product_dir(sku)
+    folder = product_dir(sku, factory_id)
     return folder.is_dir() and any(_is_real_file(p) for p in folder.iterdir())
 
 
@@ -105,7 +134,7 @@ def _archive_existing(sku: str, folder: Path, index: int) -> bool:
     return archived
 
 
-def save_main_image(sku: str, content: bytes) -> bool:
+def save_main_image(sku: str, content: bytes, factory_id: Optional[int] = None) -> bool:
     """يحفظ الصورة الرئيسية (1.ext) في مجلد المنتج وينشئ المجلد إن لزم.
     تُعيد True إن استبدلت صورة قديمة (وهذه تُنقل إلى النسخة الاحتياطية).
     ترفع InvalidSkuError لـ SKU غير صالح، وValueError لمحتوى ليس صورة معروفة."""
@@ -113,7 +142,7 @@ def save_main_image(sku: str, content: bytes) -> bool:
     if ext is None:
         raise ValueError("الملف ليس صورة JPEG أو PNG أو WebP")
 
-    folder = product_dir(sku)
+    folder = product_dir(sku, factory_id)
     folder.mkdir(parents=True, exist_ok=True, mode=0o775)
 
     # نكتب في ملف مؤقت ثم نستبدل، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً

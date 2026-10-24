@@ -116,7 +116,7 @@ class InstagramVideoFitTests(ConfiguredCase):
 
     def test_transcode_crops_and_scales_to_vertical_reel_dimensions(self):
         command = []
-        with mock.patch.object(instagram_media.shutil, "which", return_value="/usr/bin/ffmpeg"), \
+        with mock.patch.object(instagram_media.ffmpeg_tools, "find_tool", return_value="/usr/bin/ffmpeg"), \
                 mock.patch.object(
                     instagram_media, "_run_media_command",
                     side_effect=lambda args, **kwargs: command.extend(args),

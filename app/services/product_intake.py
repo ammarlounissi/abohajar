@@ -77,7 +77,7 @@ def prepare_submission(
         return Rejected(RejectionCode.SKU_TAKEN, sku)
     return Submission(
         sku=sku, title=title, price=price, media_ref=media_ref,
-        exists=bool(existing) or media.has_media(sku),
+        exists=bool(existing) or media.has_media(sku, factory.id),
     )
 
 
@@ -160,7 +160,7 @@ async def store_product(
         return StoreResult(StoreStatus.NOT_IMAGE)
     fields = {
         "sku": submission.sku, "title": submission.title, "price": submission.price,
-        "primary_media_url": media.public_image_url(submission.sku, ext),
+        "primary_media_url": media.public_image_url(submission.sku, ext, factory_id=factory.id),
     }
     try:
         product, outcome = upsert_product(db, factory, fields)
@@ -170,7 +170,7 @@ async def store_product(
 
     # الملف قبل commit: إن فشلت الكتابة نتراجع عن القاعدة فلا يبقى منتج بلا صورة
     try:
-        media.save_main_image(submission.sku, content)
+        media.save_main_image(submission.sku, content, factory.id)
     except (ValueError, OSError):
         db.rollback()
         logger.exception("Failed saving image for %s", submission.sku)

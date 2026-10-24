@@ -249,7 +249,7 @@ async def _handle_image(db: Session, factory: models.Factory, from_phone: str, m
         return
 
     # المنتج أو مجلده موجود: لا نكتب شيئاً قبل أن يوافق المصنع صراحةً على التحديث
-    if existing or media.has_media(sku):
+    if existing or media.has_media(sku, factory.id):
         await _ask_to_update(db, factory, from_phone, sku, title, price, media_id)
         return
 
@@ -338,7 +338,7 @@ async def _store_product(
         return
     fields = {
         "sku": sku, "title": title, "price": price,
-        "primary_media_url": media.public_image_url(sku, ext),
+        "primary_media_url": media.public_image_url(sku, ext, factory_id=factory.id),
     }
     try:
         product, outcome = upsert_product(db, factory, fields)
@@ -351,7 +351,7 @@ async def _store_product(
 
     # الملف قبل commit: إن فشلت الكتابة نتراجع عن القاعدة فلا يبقى منتج بلا صورة
     try:
-        media.save_main_image(sku, content)
+        media.save_main_image(sku, content, factory.id)
     except (ValueError, OSError):
         db.rollback()
         logger.exception("Failed saving image for %s", sku)

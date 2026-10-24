@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from app.core.config import settings
+from app.services import media
 from app.services.import_report import ImportConfigError, format_report
 from app.services.media_import import run_import, sync_touched
 
@@ -36,7 +37,7 @@ def main(argv=None) -> int:
         print(f"❌ {exc}")
         return 2
 
-    print(f"📁 المجلد: {settings.MEDIA_ROOT}")
+    print(f"📁 المجلد: {media.media_root_for(args.factory_id or settings.DEFAULT_FACTORY_ID)}")
     print(format_report(report, limit=None if args.verbose else 15))
 
     if not args.apply:

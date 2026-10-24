@@ -39,21 +39,23 @@ def main(argv=None) -> int:
 
     db = SessionLocal()
     try:
+        factory_of = dict(db.query(models.Product.sku, models.Product.factory_id))   # مسار الوسائط يتبع المصنع
         if args.all:
-            skus = [sku for (sku,) in db.query(models.Product.sku).order_by(models.Product.sku)]
+            skus = sorted(factory_of)
         else:
             skus = list(dict.fromkeys(s.strip().upper() for s in args.skus))
 
         done = skipped = failed = 0
         for sku in skus:
             try:
-                if args.all and video_maker.has_video(sku):
+                if args.all and video_maker.has_video(sku, factory_of.get(sku)):
                     skipped += 1
                     continue
                 if args.dry_run:
-                    n = len(video_maker.list_source_images(sku)[:video_maker.MAX_IMAGES])
-                    nxt = (video_maker.video_indexes(sku) or [0])[-1] + 1
-                    print(f"[dry-run] {sku}: {n} صورة -> {video_maker.public_video_url(sku, nxt)}")
+                    fid = factory_of.get(sku)
+                    n = len(video_maker.list_source_images(sku, fid)[:video_maker.MAX_IMAGES])
+                    nxt = (video_maker.video_indexes(sku, fid) or [0])[-1] + 1
+                    print(f"[dry-run] {sku}: {n} صورة -> {video_maker.public_video_url(sku, nxt, fid)}")
                     continue
                 result = product_service.generate_product_video(
                     db, sku, duration=args.duration, fit=args.fit, audio=args.audio,

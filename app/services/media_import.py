@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app import models, schemas
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.services import media
 from app.services.import_report import ImportConfigError, ImportReport
 from app.services.media_scan import build_records, read_csv_rows, scan_media_root
 from app.services.meta import sync_products_in_background
@@ -45,16 +46,23 @@ def run_import(*, apply: bool, factory_id: Optional[int] = None,
                csv_path: Optional[Path] = None) -> ImportReport:
     """apply=False: تجربة لا تكتب شيئاً. دالة متزامنة (تقرأ ملفات كثيرة)، فتُستدعى من
     المسارات غير المتزامنة عبر asyncio.to_thread. ترفع ImportConfigError عند خلل الإعداد."""
-    csv_path = csv_path or settings.PRODUCTS_CSV_PATH or settings.MEDIA_ROOT / "products.csv"
+    fid = factory_id or settings.DEFAULT_FACTORY_ID
+    root = media.media_root_for(fid)                 # لصاحب المشروع MEDIA_ROOT، ولغيره FACTORY_MEDIA_ROOT/{id}
+    if root is None or not root.is_dir():
+        raise ImportConfigError(f"مجلد وسائط المصنع غير موجود: {root}")
+    if media.is_owner_factory(fid):
+        csv_path = csv_path or settings.PRODUCTS_CSV_PATH or root / "products.csv"
+    else:                                            # ملف CSV صاحب المشروع لا يخص المصانع الأخرى
+        csv_path = csv_path or root / "products.csv"
     if not csv_path.is_file():
         raise ImportConfigError(f"ملف CSV غير موجود: {csv_path}")
 
-    scan = scan_media_root(settings.MEDIA_ROOT)
+    scan = scan_media_root(root)
     try:
         rows, csv_warnings = read_csv_rows(csv_path)
     except ValueError as exc:
         raise ImportConfigError(str(exc)) from exc
-    build = build_records(scan, rows)
+    build = build_records(scan, rows, fid)
 
     # نتحقق من كل سجل بنفس مخطط الـ API (السعر > 0، العنوان، الرمز...)
     valid: List[schemas.ProductBase] = []
@@ -77,7 +85,6 @@ def run_import(*, apply: bool, factory_id: Optional[int] = None,
 
     db = SessionLocal()
     try:
-        fid = factory_id or settings.DEFAULT_FACTORY_ID
         factory = db.query(models.Factory).filter(models.Factory.id == fid).first() if fid else None
         if not factory:
             names = ", ".join(f"{f.id}: {f.name}" for f in db.query(models.Factory).order_by(models.Factory.id))

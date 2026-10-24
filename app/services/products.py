@@ -39,13 +39,13 @@ def parse_caption(caption: str) -> Optional[Tuple[str, float, str]]:
     return title, price, sku.upper()
 
 
-def build_image_url(sku: str) -> str:
+def build_image_url(sku: str, factory_id: Optional[int] = None) -> str:
     """رابط الصورة الرئيسية من الـ SKU: {IMAGE_BASE_URL}/{SKU}/1.{الامتداد الفعلي}.
     إن لم نجد الملف على القرص نفترض .jpg."""
     if not settings.IMAGE_BASE_URL:
         return ""
-    ext = (media.existing_image_ext(sku) if media.is_valid_media_sku(sku) else None) or ".jpg"
-    return media.public_image_url(sku, ext)
+    ext = (media.existing_image_ext(sku, factory_id=factory_id) if media.is_valid_media_sku(sku) else None) or ".jpg"
+    return media.public_image_url(sku, ext, factory_id=factory_id)
 
 
 def default_description(title: str, factory: models.Factory) -> str:
@@ -108,7 +108,7 @@ def import_csv(db: Session, factory: models.Factory, content: bytes):
 
         fields = {k: row.get(k, "") for k in ("sku", "title", "price")}
         fields["sku"] = fields["sku"].upper()
-        fields["primary_media_url"] = row.get("primary_media_url") or build_image_url(fields["sku"])
+        fields["primary_media_url"] = row.get("primary_media_url") or build_image_url(fields["sku"], factory.id)
         if not fields["primary_media_url"]:
             errors.append(f"السطر {row_num}: لا يوجد رابط صورة، وتعذر بناؤه من الرمز")
             continue
@@ -214,7 +214,9 @@ def generate_product_video(
     """يبني ريلز جديداً للمنتج من صوره (في آخر تسلسل الفيديوهات، دون استبدال أي قائم) ويجعل رابطه video_url. الفيديو ليس جزءاً من كتالوج ميتا،
     لذلك لا تتغير حالة المزامنة. يرفع أخطاء video_maker (NotFound / InvalidInput / VideoRenderError...)."""
     product = get_product_by_sku(db, sku)
-    result = video_maker.create_product_video(product.sku, duration=duration, fit=fit, audio=audio)
+    result = video_maker.create_product_video(
+        product.sku, duration=duration, fit=fit, audio=audio, factory_id=product.factory_id,
+    )
     product.video_url = result.url
     db.commit()
     return result
