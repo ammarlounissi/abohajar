@@ -184,6 +184,7 @@ class Product(Base):
 
     primary_media_url = Column(String(500), nullable=False)
     additional_media_urls = Column(JSON, default=list)
+    video_url = Column(String(500), nullable=True)   # ريلز {IMAGE_BASE_URL}/{SKU}/1.mp4 (services/video_maker.py)
 
     meta_product_id = Column(String(100), unique=True, nullable=True)
     sync_status = Column(Enum(SyncStatus), default=SyncStatus.PENDING)

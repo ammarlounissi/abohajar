@@ -45,6 +45,7 @@ abohajar/
 │       └── dedup.py           منع معالجة الرسائل المكررة
 ├── alembic/                 ترحيلات المخطط (versions/)
 ├── scripts/import_from_media.py   استيراد المنتجات من مجلد الصور وCSV (طرفية)
+├── scripts/make_videos.py         بناء ريلز المنتجات من صورها بـ ffmpeg (طرفية)
 ├── tests/                   اختبارات الوحدة (unittest)
 ├── test_api.py              فاحص مسارات الـ API على خادم يعمل (ليس اختبار وحدة)
 ├── requirements.txt
@@ -289,6 +290,42 @@ python -m scripts.seed_posts --clear --apply                  # حذف منشو�
 - **العالقون:** منشور بقي `publishing` أكثر من `PUBLISH_STALE_MINUTES` لا يُعاد نشره تلقائياً (ربما نُشر)؛ يُكتب له تقرير في `publish_reports` ويظهر في مخرجات التشغيل.
 - **التقارير:** `publish_reports.kind` = `token` (كود 190/463/467) أو `media` أو `limit` أو `network` أو `unknown`، و`sent_at` فارغ حتى تُبنى قناة الإرسال.
 - **الجدولة:** ملفات systemd في `deploy/systemd/` (المؤقت يعمل كل دقيقة)؛ انظر التفعيل في أعلى كل ملف ووثيقة المرحلة.
+
+---
+
+## توليد فيديو المنتج (ريلز) بـ ffmpeg
+
+يبني ريلز **MP4 عمودي 720×1280، حوالي 7 ثوانٍ، H.264 بلا صوت (+faststart)** من صور المنتج (حتى 6 صور بترتيب أرقامها):
+تكبير/تصغير تدريجي لكل صورة + انتقال متداخل بينها. الناتج `{MEDIA_ROOT}/{الفئة}/{SKU}/1.mp4` ويُخدم بالرابط
+`{IMAGE_BASE_URL}/{SKU}/1.mp4` (قاعدة Nginx الحالية تسمح بـ `.mp4` فلا تعديل مطلوب)، ويُحفظ الرابط في عمود `products.video_url`.
+الغلاف (poster) هو الصورة الرئيسية `1.jpg` نفسها. الحجم المستهدف < 3MB (يعيد الضغط تلقائياً مرة بجودة أقل إن زاد).
+
+**المتطلب:** `ffmpeg` و`ffprobe` على الخادم (`sudo apt install ffmpeg`).
+
+**الترحيل (مرة واحدة، بعد نسخ القاعدة احتياطياً):**
+```bash
+cp hojrat_bladi.db hojrat_bladi.db.bak-$(date +%Y%m%d-%H%M%S)
+alembic upgrade head        # يضيف العمود video_url (قابل للفراغ، لا يلمس البيانات)
+```
+
+**من الطرفية:**
+```bash
+python -m scripts.make_videos B001                      # منتج واحد
+python -m scripts.make_videos --all --dry-run           # ماذا سيُبنى (المنتجات التي لا فيديو لها)
+python -m scripts.make_videos --all                     # كلها (تتجاوز ما له فيديو)
+python -m scripts.make_videos B001 --overwrite --fit crop --duration 8
+```
+
+**من الـ API** (مفتاح `X-API-Key`):
+```bash
+curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
+  "https://api.hadjretbladi.com/api/products/by-sku/B001/video?duration=7&fit=blur&overwrite=false"
+```
+`fit=blur` (الافتراضي): الصورة كاملة فوق خلفية مموّهة منها (مناسب لصور المنتجات الأفقية)، و`fit=crop`: ملء الإطار بالقص.
+الفيديو القديم عند `overwrite=true` يُنقل إلى `MEDIA_BACKUP_DIR` ولا يُحذف. الفيديو لا يدخل كتالوج ميتا ولا يغيّر `sync_status`.
+`video_url` يظهر في `GET /api/products` و`/api/products/{sku}` ليستعمله فيد Next.js (`autoplay muted loop playsinline` و`poster` = `primary_media_url`).
+
+الكود: `app/services/video_maker.py` (ffmpeg فقط، لا قاعدة بيانات) و`products.generate_product_video` (يحفظ الرابط).
 
 ---
 

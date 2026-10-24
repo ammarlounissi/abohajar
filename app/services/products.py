@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.core.config import settings
-from app.services import media
+from app.services import media, video_maker
 from app.services.errors import DuplicateError, InvalidInputError, NotFoundError
 
 # فاصل يجب أن يحيط به مسافات (أو سطر جديد) حتى لا ينكسر SKU مثل STONE-GLM-01
@@ -205,6 +205,19 @@ def update_product(db: Session, product: models.Product, values: dict) -> models
     db.commit()
     db.refresh(product)
     return product
+
+
+def generate_product_video(
+    db: Session, sku: str, *, duration: float = video_maker.DEFAULT_DURATION,
+    fit: str = "blur", overwrite: bool = False,
+) -> video_maker.VideoResult:
+    """يبني ريلز المنتج من صوره ويحفظ رابطه في video_url. الفيديو ليس جزءاً من كتالوج ميتا،
+    لذلك لا تتغير حالة المزامنة. يرفع أخطاء video_maker (NotFound / InvalidInput / VideoRenderError...)."""
+    product = get_product_by_sku(db, sku)
+    result = video_maker.create_product_video(product.sku, duration=duration, fit=fit, overwrite=overwrite)
+    product.video_url = result.url
+    db.commit()
+    return result
 
 
 def delete_product(db: Session, product: models.Product) -> str:

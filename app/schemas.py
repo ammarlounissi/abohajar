@@ -165,6 +165,7 @@ class ProductBase(BaseModel):
     brand: str = "Hojrat Bladi"
     primary_media_url: str = Field(min_length=1, max_length=500)
     additional_media_urls: List[str] = Field(default_factory=list)
+    video_url: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("sku", mode="before")
     @classmethod
@@ -261,6 +262,16 @@ class ProductPublicResponse(BaseModel):
     brand: str
     primary_media_url: str
     additional_media_urls: List[str] = Field(default_factory=list)
+    video_url: Optional[str] = None
+
+
+class ProductVideoResponse(BaseModel):
+    sku: str
+    video_url: str
+    size_bytes: int
+    duration: float
+    images_used: int
+    replaced: bool
 
 
 MediaType = Literal["text", "image", "gallery", "reel"]

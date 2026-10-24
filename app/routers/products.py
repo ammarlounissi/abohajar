@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
@@ -60,6 +60,23 @@ def update_product(product_id: int, update: schemas.ProductUpdate, db: Session =
 def update_product_by_sku(sku: str, update: schemas.ProductSkuUpdate, db: Session = Depends(get_db)):
     product = product_service.get_product_by_sku(db, sku)
     return product_service.update_product(db, product, update.model_dump(exclude_unset=True))
+
+
+@router.post("/by-sku/{sku}/video", response_model=schemas.ProductVideoResponse, dependencies=admin_only)
+def create_product_video(
+    sku: str,
+    duration: float = Query(7.0, ge=3, le=15, description="مدة الريلز بالثواني"),
+    fit: Literal["blur", "crop"] = Query("blur", description="blur: الصورة كاملة فوق خلفية مموّهة، crop: ملء الإطار بالقص"),
+    overwrite: bool = Query(False, description="استبدال فيديو موجود (القديم يُنقل إلى MEDIA_BACKUP_DIR)"),
+    db: Session = Depends(get_db),
+):
+    """يبني ريلز MP4 عمودي (720×1280) من صور المنتج بـ ffmpeg ويحفظ رابطه في المنتج.
+    دالة عادية (لا async) فيشغّلها FastAPI في خيط منفصل ولا تحجب باقي الطلبات."""
+    result = product_service.generate_product_video(db, sku, duration=duration, fit=fit, overwrite=overwrite)
+    return schemas.ProductVideoResponse(
+        sku=result.sku, video_url=result.url, size_bytes=result.size_bytes,
+        duration=result.duration, images_used=result.images_used, replaced=result.replaced,
+    )
 
 
 @router.delete("/by-sku/{sku}", dependencies=admin_only)
