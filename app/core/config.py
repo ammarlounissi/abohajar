@@ -88,8 +88,13 @@ class Settings:
     # ملفات الصوت (mp3/m4a/wav...) التي تُدمج في الريلز بـ ffmpeg. تُقرأ من القرص فقط ولا يخدمها Nginx،
     # لذلك تُوضع خارج MEDIA_ROOT (مثلاً /home/ammar/media/audio). إن تُرك فارغاً فلا دمج صوت.
     AUDIO_ROOT = Path(_get("AUDIO_ROOT")).expanduser() if _get("AUDIO_ROOT") else None
-    # مكتبة وسائط المصانع المرفوعة عبر API
-    FACTORY_MEDIA_ROOT = Path("/home/ammar/media")
+    # مكتبة وسائط المصانع المرفوعة عبر API: {FACTORY_MEDIA_ROOT}/{factory_id}/{uuid}.{ext}
+    # مجلد مخصص "factory" بجانب products (وليس المجلد media نفسه، كي لا تختلط أرقام المصانع بغيرها).
+    # الافتراضي: شقيق MEDIA_ROOT (مثلاً /home/ammar/media/factory)، ويمكن تغييره بـ FACTORY_MEDIA_ROOT في .env.
+    FACTORY_MEDIA_ROOT = (
+        Path(_get("FACTORY_MEDIA_ROOT")).expanduser() if _get("FACTORY_MEDIA_ROOT")
+        else (MEDIA_ROOT.parent / "factory" if MEDIA_ROOT else Path("/home/ammar/media/factory"))
+    )
     # أين تُنقل الصورة القديمة عند استبدالها (خارج MEDIA_ROOT كي لا تُزامَن ولا تُخدم)
     MEDIA_BACKUP_DIR = (
         Path(_get("MEDIA_BACKUP_DIR")).expanduser()

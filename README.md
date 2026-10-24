@@ -145,10 +145,18 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | المسار | الوظيفة |
 | --- | --- |
 | `POST /api/factories/{factory_id}/media` | إضافة وسيط بصيغة JSON: `media_type` (`image` أو `video`)، `url` (رابط HTTP/HTTPS)، و`description` اختياري |
-| `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `/home/ammar/media/{factory_id}`، ويُقبل JPG/JPEG/PNG/WEBP/GIF/ICO/SVG أو MP4/MOV/WEBM حتى 100 ميغابايت |
+| `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `FACTORY_MEDIA_ROOT/{factory_id}` (الافتراضي `/home/ammar/media/factory/{factory_id}`)، ويُقبل JPG/JPEG/PNG/WEBP/GIF/ICO/SVG أو MP4/MOV/WEBM حتى 100 ميغابايت |
 | `GET /api/factories/{factory_id}/media` | عرض وسائط المصنع، مع `?media_type=image` أو `?media_type=video`، و`skip` و`limit` للتصفح |
 | `DELETE /api/factories/{factory_id}/media/{media_id}` | حذف وسيط من مكتبة المصنع المحدد |
 
+مكان الحفظ: مجلد مخصص `factory` بجانب `products` (الافتراضي شقيق `MEDIA_ROOT`، ويُغيَّر بـ `FACTORY_MEDIA_ROOT` في `.env`). الروابط العامة لا تتغير لأنها تعتمد رقم المصنع واسم الملف لا المسار على القرص.
+**لنقل الملفات التي حُفظت سابقًا في `/home/ammar/media/{رقم}/`:**
+```bash
+sudo systemctl stop <خدمة-fastapi>                 # اختياري لكن أفضل
+python -m scripts.move_factory_media               # عرض فقط
+python -m scripts.move_factory_media --apply       # تنفيذ (لا يستبدل ملفاً موجوداً، ولا يلمس غير ملفات المكتبة)
+sudo systemctl start <خدمة-fastapi>
+```
 المجلد لازم يكون قابلاً للكتابة بواسطة مستخدم تشغيل التطبيق. رابط الملف المرفوع يُبنى من `BASE_URL` ويُقدّم عبر `/api/media/factories/{factory_id}/{filename}`. تبقى إضافة رابط خارجي عبر مسار `POST` الأساسي مدعومة. طبّق `alembic upgrade head` لإنشاء الجدول.
 
 لتسجيل روابط صور المنتجات الموجودة لمصنع رقم 4 في مكتبة الوسائط، شغّل من جذر المشروع:
