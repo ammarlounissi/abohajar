@@ -295,10 +295,12 @@ python -m scripts.seed_posts --clear --apply                  # حذف منشو�
 
 ## توليد فيديو المنتج (ريلز) بـ ffmpeg
 
-يبني ريلز **MP4 عمودي 720×1280، حوالي 7 ثوانٍ، H.264 بلا صوت (+faststart)** من صور المنتج (حتى 6 صور بترتيب أرقامها):
-تكبير/تصغير تدريجي لكل صورة + انتقال متداخل بينها. الناتج `{MEDIA_ROOT}/{الفئة}/{SKU}/1.mp4` ويُخدم بالرابط
-`{IMAGE_BASE_URL}/{SKU}/1.mp4` (قاعدة Nginx الحالية تسمح بـ `.mp4` فلا تعديل مطلوب)، ويُحفظ الرابط في عمود `products.video_url`.
-الغلاف (poster) هو الصورة الرئيسية `1.jpg` نفسها. الحجم المستهدف < 3MB (يعيد الضغط تلقائياً مرة بجودة أقل إن زاد).
+يبني ريلز **متوافقًا مع إنستغرام: MP4 (H.264 High, yuv420p)، 9:16 بدقة 1080×1920، 30 إطارًا/ث، حوالي 7 ثوانٍ، +faststart** من صور المنتج
+(حتى 6 صور بترتيب أرقامها): تكبير/تصغير تدريجي لكل صورة + انتقال متداخل بينها. بلا صوت، أو بصوت AAC ستيريو 48kHz عند دمج ملف صوتي.
+**يُحفظ دائمًا في آخر تسلسل الفيديوهات ولا يستبدل أي فيديو:** `{MEDIA_ROOT}/{الفئة}/{SKU}/{n}.mp4` حيث n = آخر رقم فيديو موجود + 1
+(1.mp4 ثم 2.mp4 ...، وتُحتسب الفيديوهات المرفوعة يدويًا أيضًا). يُخدم بالرابط `{IMAGE_BASE_URL}/{SKU}/{n}.mp4`
+(قاعدة Nginx الحالية تسمح بـ `.mp4`)، ويصبح الأحدث `products.video_url`. الغلاف (poster) هو الصورة الرئيسية `1.jpg` نفسها.
+الحجم الأقصى 10MB (يعيد الضغط تلقائيًا مرة بجودة أقل إن زاد؛ الحالة الواقعية 1 إلى 3MB). بناء الفيديو يستغرق ~10 إلى 20 ثانية.
 
 **المتطلب:** `ffmpeg` و`ffprobe` على الخادم (`sudo apt install ffmpeg`).
 
@@ -310,29 +312,29 @@ alembic upgrade head        # يضيف العمود video_url (قابل للفر
 
 **من الطرفية:**
 ```bash
-python -m scripts.make_videos B001                      # منتج واحد
+python -m scripts.make_videos B001                      # منتج واحد (كل تشغيل يضيف فيديو جديدًا برقم تالٍ)
 python -m scripts.make_videos --all --dry-run           # ماذا سيُبنى (المنتجات التي لا فيديو لها)
-python -m scripts.make_videos --all                     # كلها (تتجاوز ما له فيديو)
-python -m scripts.make_videos B001 --overwrite --fit crop --duration 8
+python -m scripts.make_videos --all                     # كل منتج لا فيديو له (من له فيديو يُتجاوز)
+python -m scripts.make_videos B001 --fit crop --duration 8
 ```
 
 **من الـ API** (مفتاح `X-API-Key`):
 ```bash
 curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
-  "https://api.hadjretbladi.com/api/products/by-sku/B001/video?duration=7&fit=blur&overwrite=false"
+  "https://api.hadjretbladi.com/api/products/by-sku/B001/video?duration=7&fit=blur"
 ```
 `fit=blur` (الافتراضي): الصورة كاملة فوق خلفية مموّهة منها (مناسب لصور المنتجات الأفقية)، و`fit=crop`: ملء الإطار بالقص.
-الفيديو القديم عند `overwrite=true` يُنقل إلى `MEDIA_BACKUP_DIR` ولا يُحذف. الفيديو لا يدخل كتالوج ميتا ولا يغيّر `sync_status`.
+الاستجابة تتضمن `index` (رقم الفيديو الجديد) و`video_url`. الفيديو لا يدخل كتالوج ميتا ولا يغيّر `sync_status`.
 `video_url` يظهر في `GET /api/products` و`/api/products/{sku}` ليستعمله فيد Next.js (`autoplay muted loop playsinline` و`poster` = `primary_media_url`).
 
 **دمج صوت:** ضع ملفات الصوت (mp3/m4a/aac/wav/ogg) في مجلد **خارج `MEDIA_ROOT`** (مثل `/home/ammar/media/audio`) واضبطه في `.env`:
 `AUDIO_ROOT=/home/ammar/media/audio`. لا يحتاج Nginx ولا Syncthing أن «يلتقطه»: ffmpeg يقرؤه من القرص ولا يُخدم إلا الـ MP4 الناتج.
 ```bash
 python -m scripts.make_videos --list-audio
-python -m scripts.make_videos B001 --overwrite --audio music1.mp3
-curl -X POST -H "X-API-Key: $ADMIN_API_KEY" "https://api.hadjretbladi.com/api/products/by-sku/B001/video?overwrite=true&audio=music1.mp3"
+python -m scripts.make_videos B001 --audio music1.mp3
+curl -X POST -H "X-API-Key: $ADMIN_API_KEY" "https://api.hadjretbladi.com/api/products/by-sku/B001/video?audio=music1.mp3"
 ```
-الصوت يتكرر إن كان أقصر من الفيديو ويُقص عند نهايته مع ظهور/اختفاء تدريجي (AAC 96kbps). `GET /api/products/audio-files` يعرض المتاح.
+الصوت يتكرر إن كان أقصر من الفيديو ويُقص عند نهايته مع ظهور/اختفاء تدريجي (AAC 128kbps، 48kHz). `GET /api/products/audio-files` يعرض المتاح.
 تنبيه: الفيد على الموقع يشغّل الفيديو صامتًا (`muted`)، فالصوت مفيد أساسًا عند نشر الريلز على إنستغرام وفيسبوك.
 
 الكود: `app/services/video_maker.py` (ffmpeg فقط، لا قاعدة بيانات) و`products.generate_product_video` (يحفظ الرابط).

@@ -1,15 +1,16 @@
 """توليد ريلز قصير (MP4 عمودي) من صور المنتج باستعمال ffmpeg.
 
 المدخل: صور المنتج الموجودة على القرص  {MEDIA_ROOT}/{الفئة}/{SKU}/{1,2,3...}.{jpg|png|webp}
-المخرج: {MEDIA_ROOT}/{الفئة}/{SKU}/1.mp4   ويُخدم عامّاً بالرابط  {IMAGE_BASE_URL}/{SKU}/1.mp4
+المخرج: {MEDIA_ROOT}/{الفئة}/{SKU}/{n}.mp4   ويُخدم عامّاً بالرابط  {IMAGE_BASE_URL}/{SKU}/{n}.mp4
         (قاعدة Nginx الحالية تسمح بـ [0-9]+\\.mp4 فلا حاجة لتعديلها).
+        n = أول رقم بعد آخر فيديو موجود (1 ثم 2 ثم 3...). لا يُستبدل ولا يُحذف أي فيديو قائم أبداً.
 
-المواصفات (من وثيقة المشروع 4.4): MP4 (H.264)، 9:16 بدقة 720×1280، حوالي 7 ثوانٍ، بدون صوت،
-حجم أقل من 3 ميغابايت، `-movflags +faststart`. الغلاف (poster) هو الصورة الرئيسية 1.jpg نفسها
-لأنها أول لقطة في الفيديو، فلا ملف إضافي.
+المواصفات متوافقة مع ريلز إنستغرام: MP4 (H.264 High، yuv420p)، 9:16 بدقة 1080×1920، 30 إطاراً/ث،
+حوالي 7 ثوانٍ (المسموح 3 ثوانٍ فأكثر)، بدون صوت أو بصوت AAC ستيريو 48kHz، `-movflags +faststart`.
+الغلاف (poster) هو الصورة الرئيسية 1.jpg نفسها لأنها أول لقطة في الفيديو.
 
 الخدمة لا تعرف HTTP ولا أي قناة: تُرجع نتيجة (VideoResult) وترفع أخطاء الخدمات.
-الكتابة على القرص فقط. ربط الرابط بالمنتج في القاعدة في attach_video (products.py).
+الكتابة على القرص فقط. ربط الرابط بالمنتج في القاعدة في products.generate_product_video.
 """
 import logging
 import os
@@ -18,7 +19,6 @@ import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,17 +28,16 @@ from app.services.errors import InvalidInputError, NotFoundError, ServiceError
 
 logger = logging.getLogger(__name__)
 
-WIDTH, HEIGHT = 720, 1280
-CANVAS_W, CANVAS_H = 1080, 1920          # نركّب اللقطة بدقة أعلى ثم نصغّرها: حركة التكبير أنعم
-FPS = 25
-VIDEO_INDEX = 1                          # اسم الملف الناتج 1.mp4
+WIDTH, HEIGHT = 1080, 1920               # مقاس ريلز إنستغرام الموصى به (9:16)
+CANVAS_W, CANVAS_H = 2160, 3840          # نركّب اللقطة بضعف الدقة ثم نصغّرها: حركة التكبير أنعم بلا اهتزاز
+FPS = 30
 VIDEO_EXT = ".mp4"
 
 DEFAULT_DURATION = 7.0
 MIN_DURATION, MAX_DURATION = 3.0, 15.0
 MAX_IMAGES = 6                           # أكثر من ذلك يجعل كل لقطة أقصر من أن تُرى
 CROSSFADE = 0.5
-MAX_BYTES = 3 * 1024 * 1024
+MAX_BYTES = 10 * 1024 * 1024            # حد عملي لـ 1080p قصير (حد إنستغرام نفسه أعلى بكثير)
 FFMPEG_TIMEOUT = 300
 
 AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".ogg")
@@ -64,20 +63,32 @@ class VideoResult:
     size_bytes: int
     duration: float
     images_used: int
-    replaced: bool
+    index: int
     audio: Optional[str] = None
 
 
-def public_video_url(sku: str, index: int = VIDEO_INDEX) -> str:
+def public_video_url(sku: str, index: int) -> str:
     return f"{settings.IMAGE_BASE_URL}/{sku}/{index}{VIDEO_EXT}"
 
 
-def video_path(sku: str, index: int = VIDEO_INDEX) -> Path:
+def video_path(sku: str, index: int) -> Path:
     return media.product_dir(sku) / f"{index}{VIDEO_EXT}"
 
 
+def video_indexes(sku: str) -> List[int]:
+    """أرقام الفيديوهات الموجودة فعلاً (1.mp4 و2.mp4...) بالترتيب، سواء بناها النظام أو رُفعت يدوياً."""
+    folder = media.product_dir(sku)
+    if not folder.is_dir():
+        return []
+    found = {
+        int(f.stem) for f in folder.iterdir()
+        if f.is_file() and f.suffix.lower() == VIDEO_EXT and f.stem.isascii() and f.stem.isdigit() and int(f.stem) > 0
+    }
+    return sorted(found)
+
+
 def has_video(sku: str) -> bool:
-    return video_path(sku).is_file()
+    return bool(video_indexes(sku))
 
 
 def list_source_images(sku: str) -> List[Path]:
@@ -172,11 +183,11 @@ def resolve_audio(name: str) -> Path:
 
 
 def _encode_args(crf: int, with_audio: bool = False) -> list:
-    audio = ["-c:a", "aac", "-b:a", "96k", "-ar", "44100", "-ac", "2"] if with_audio else ["-an"]
+    audio = ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"] if with_audio else ["-an"]
     return [
         "-c:v", "libx264", "-preset", "slow", "-crf", str(crf),
-        "-maxrate", "2200k", "-bufsize", "4400k",
-        "-pix_fmt", "yuv420p", "-profile:v", "main", *audio,
+        "-maxrate", "6000k", "-bufsize", "12000k",
+        "-pix_fmt", "yuv420p", "-profile:v", "high", "-level", "4.0", "-r", str(FPS), *audio,
         "-movflags", "+faststart", "-f", "mp4",
     ]
 
@@ -213,23 +224,11 @@ def _run_ffmpeg(
         raise VideoRenderError("تعذّر بناء الفيديو من الصور (راجع سجل الخادم)")
 
 
-def _archive_existing(sku: str, path: Path) -> bool:
-    """الفيديو القديم يُنقل إلى MEDIA_BACKUP_DIR بدل حذفه (كما تفعل الصور)."""
-    if not path.is_file():
-        return False
-    backup_dir = settings.MEDIA_BACKUP_DIR / sku
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    shutil.move(str(path), str(backup_dir / f"{path.stem}_{stamp}{path.suffix}"))
-    return True
-
-
 def create_product_video(
-    sku: str, *, duration: float = DEFAULT_DURATION, fit: str = "blur", overwrite: bool = False,
-    audio: Optional[str] = None,
+    sku: str, *, duration: float = DEFAULT_DURATION, fit: str = "blur", audio: Optional[str] = None,
 ) -> VideoResult:
-    """يبني {SKU}/1.mp4 من صور المنتج. لا يلمس قاعدة البيانات.
-    NotFoundError: لا صور للمنتج. InvalidInputError: SKU أو مدخل غير صالح، أو فيديو موجود ولم يُطلب الاستبدال.
+    """يبني فيديو جديداً في آخر تسلسل فيديوهات المنتج ({SKU}/{n}.mp4) دون المساس بأي فيديو قائم.
+    لا يلمس قاعدة البيانات. NotFoundError: لا صور للمنتج. InvalidInputError: مدخل غير صالح.
     VideoToolMissingError / VideoRenderError: مشاكل ffmpeg."""
     if not media.is_valid_media_sku(sku):
         raise InvalidInputError("رمز المنتج (SKU) غير صالح")
@@ -250,28 +249,39 @@ def create_product_video(
     if not ffmpeg:
         raise VideoToolMissingError("ffmpeg غير مثبت على الخادم (sudo apt install ffmpeg)")
 
-    target = video_path(sku)
-    if target.exists() and not overwrite:
-        raise InvalidInputError("للمنتج فيديو موجود مسبقاً (استعمل الاستبدال لإعادة بنائه)")
-
-    # نبني في ملف مؤقت ثم نستبدل، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً (.tmp مُتجاهَل)
-    tmp = target.parent / f".video-{uuid.uuid4().hex}.tmp"
+    folder = media.product_dir(sku)
+    # نبني في ملف مؤقت ثم ننشره باسمه النهائي، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً (.tmp مُتجاهَل)
+    tmp = folder / f".video-{uuid.uuid4().hex}.tmp"
     try:
-        _run_ffmpeg(ffmpeg, images, duration, fit, 26, tmp, audio_path)
+        _run_ffmpeg(ffmpeg, images, duration, fit, 23, tmp, audio_path)
         if tmp.stat().st_size > MAX_BYTES:                 # إعادة بجودة أقل مرة واحدة
             logger.info("%s video is %d bytes, re-encoding smaller", sku, tmp.stat().st_size)
-            _run_ffmpeg(ffmpeg, images, duration, fit, 31, tmp, audio_path)
+            _run_ffmpeg(ffmpeg, images, duration, fit, 28, tmp, audio_path)
         size = tmp.stat().st_size
         if size > MAX_BYTES:
             raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
-        replaced = _archive_existing(sku, target)
-        os.replace(tmp, target)
-        target.chmod(0o664)                                # www-data يقرأ، وSyncthing يكتب
+        index, target = _publish(sku, tmp)
     finally:
         tmp.unlink(missing_ok=True)
 
-    logger.info("Created video for %s (%d images, %d bytes, replaced=%s)", sku, len(images), size, replaced)
+    logger.info("Created video %s/%d.mp4 (%d images, %d bytes)", sku, index, len(images), size)
     return VideoResult(
-        sku=sku, path=target, url=public_video_url(sku), size_bytes=size,
-        duration=duration, images_used=len(images), replaced=replaced, audio=audio,
+        sku=sku, path=target, url=public_video_url(sku, index), size_bytes=size,
+        duration=duration, images_used=len(images), index=index, audio=audio,
     )
+
+
+def _publish(sku: str, tmp: Path) -> tuple:
+    """ينشر الملف المؤقت باسم {أول رقم فارغ بعد آخر فيديو}.mp4. os.link يفشل إن وُجد الهدف،
+    فلا يستبدل أي ملف حتى لو بنى طلبان متزامنان فيديو للمنتج نفسه (يعيد المحاولة برقم أعلى)."""
+    for _ in range(10):
+        indexes = video_indexes(sku)
+        index = (indexes[-1] if indexes else 0) + 1
+        target = video_path(sku, index)
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            continue
+        target.chmod(0o664)                                # www-data يقرأ، وSyncthing يكتب
+        return index, target
+    raise VideoRenderError("تعذّر حجز رقم للفيديو الجديد، أعد المحاولة")

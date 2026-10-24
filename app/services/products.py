@@ -209,12 +209,12 @@ def update_product(db: Session, product: models.Product, values: dict) -> models
 
 def generate_product_video(
     db: Session, sku: str, *, duration: float = video_maker.DEFAULT_DURATION,
-    fit: str = "blur", overwrite: bool = False, audio: Optional[str] = None,
+    fit: str = "blur", audio: Optional[str] = None,
 ) -> video_maker.VideoResult:
-    """يبني ريلز المنتج من صوره ويحفظ رابطه في video_url. الفيديو ليس جزءاً من كتالوج ميتا،
+    """يبني ريلز جديداً للمنتج من صوره (في آخر تسلسل الفيديوهات، دون استبدال أي قائم) ويجعل رابطه video_url. الفيديو ليس جزءاً من كتالوج ميتا،
     لذلك لا تتغير حالة المزامنة. يرفع أخطاء video_maker (NotFound / InvalidInput / VideoRenderError...)."""
     product = get_product_by_sku(db, sku)
-    result = video_maker.create_product_video(product.sku, duration=duration, fit=fit, overwrite=overwrite, audio=audio)
+    result = video_maker.create_product_video(product.sku, duration=duration, fit=fit, audio=audio)
     product.video_url = result.url
     db.commit()
     return result

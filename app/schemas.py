@@ -271,7 +271,7 @@ class ProductVideoResponse(BaseModel):
     size_bytes: int
     duration: float
     images_used: int
-    replaced: bool
+    index: int
     audio: Optional[str] = None
 
 

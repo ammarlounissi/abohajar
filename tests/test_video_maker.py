@@ -127,7 +127,7 @@ class AudioResolveTests(VideoMakerBase):
 
 @unittest.skipUnless(HAS_FFMPEG, "ffmpeg غير مثبت")
 class RenderTests(VideoMakerBase):
-    def test_builds_vertical_h264_reel_from_mixed_images(self):
+    def test_builds_instagram_compliant_reel_from_mixed_images(self):
         make_image(self.folder / "1.jpg", (1600, 1000), "brown")
         make_image(self.folder / "2.png", (900, 1400), "navy")
         make_image(self.folder / "3.webp", (1000, 1000), "green")
@@ -136,12 +136,15 @@ class RenderTests(VideoMakerBase):
 
         self.assertEqual(result.path, self.folder / "1.mp4")
         self.assertEqual(result.url, "https://example.com/B001/1.mp4")
-        self.assertEqual(result.images_used, 3)
-        self.assertFalse(result.replaced)
+        self.assertEqual((result.images_used, result.index), (3, 1))
         self.assertLess(result.size_bytes, video_maker.MAX_BYTES)
         info = probe(result.path)
         stream = next(s for s in info["streams"] if s["codec_type"] == "video")
-        self.assertEqual((stream["codec_name"], stream["width"], stream["height"]), ("h264", 720, 1280))
+        # شروط ريلز إنستغرام: H.264، 1080×1920 (9:16)، 30 إطاراً/ث، yuv420p
+        self.assertEqual((stream["codec_name"], stream["width"], stream["height"]), ("h264", 1080, 1920))
+        self.assertEqual(stream["r_frame_rate"], "30/1")
+        self.assertEqual(stream["pix_fmt"], "yuv420p")
+        self.assertEqual(stream["profile"], "High")
         self.assertFalse(any(s["codec_type"] == "audio" for s in info["streams"]))
         self.assertAlmostEqual(float(info["format"]["duration"]), 7.0, delta=0.1)
         # لا ملفات مؤقتة متروكة بجانب الصور
@@ -151,7 +154,7 @@ class RenderTests(VideoMakerBase):
         make_image(self.folder / "1.jpg", (800, 800))
         result = video_maker.create_product_video("B001", fit="crop", duration=4)
         stream = next(s for s in probe(result.path)["streams"] if s["codec_type"] == "video")
-        self.assertEqual((stream["width"], stream["height"]), (720, 1280))
+        self.assertEqual((stream["width"], stream["height"]), (1080, 1920))
         self.assertAlmostEqual(float(probe(result.path)["format"]["duration"]), 4.0, delta=0.1)
 
     def test_merges_short_audio_looped_to_video_length(self):
@@ -166,20 +169,45 @@ class RenderTests(VideoMakerBase):
         info = probe(result.path)
         kinds = {s["codec_type"]: s for s in info["streams"]}
         self.assertEqual(kinds["audio"]["codec_name"], "aac")
+        self.assertEqual((kinds["audio"]["sample_rate"], kinds["audio"]["channels"]), ("48000", 2))
         self.assertAlmostEqual(float(info["format"]["duration"]), 4.0, delta=0.15)
         self.assertAlmostEqual(float(kinds["audio"]["duration"]), 4.0, delta=0.15)
 
-    def test_existing_video_needs_overwrite_and_is_archived(self):
+    def test_new_video_goes_to_end_of_sequence_and_never_replaces(self):
         make_image(self.folder / "1.jpg", (600, 600))
-        video_maker.create_product_video("B001", duration=3)
-        with self.assertRaises(InvalidInputError):
-            video_maker.create_product_video("B001", duration=3)
+        first = video_maker.create_product_video("B001", duration=3)
+        before = first.path.read_bytes()
+        (self.folder / "5.mp4").write_bytes(b"uploaded by hand")      # فيديو رُفع يدوياً برقم أعلى
 
-        result = video_maker.create_product_video("B001", duration=3, overwrite=True)
-        self.assertTrue(result.replaced)
-        archived = list((self.backup / "B001").glob("1_*.mp4"))
-        self.assertEqual(len(archived), 1)
-        self.assertTrue((self.folder / "1.mp4").is_file())
+        second = video_maker.create_product_video("B001", duration=3)
+        third = video_maker.create_product_video("B001", duration=3)
+
+        self.assertEqual((first.index, second.index, third.index), (1, 6, 7))
+        self.assertEqual(third.url, "https://example.com/B001/7.mp4")
+        self.assertEqual(first.path.read_bytes(), before)
+        self.assertEqual((self.folder / "5.mp4").read_bytes(), b"uploaded by hand")
+        self.assertEqual(video_maker.video_indexes("B001"), [1, 5, 6, 7])
+        self.assertFalse(self.backup.exists())                          # لا شيء يُنقل للنسخ الاحتياطي: لا استبدال
+
+    def test_publish_retries_when_target_taken(self):
+        make_image(self.folder / "1.jpg", (600, 600))
+        tmp = self.folder / ".video-x.tmp"
+        tmp.write_bytes(b"new")
+        real_indexes = video_maker.video_indexes
+        calls = []
+
+        def racing(sku):
+            calls.append(1)
+            if len(calls) == 1:                    # الطلب الآخر يحجز الرقم 1 بعد أن قرأناه فارغاً
+                (self.folder / "1.mp4").write_bytes(b"other request")
+                return []
+            return real_indexes(sku)
+
+        with mock.patch.object(video_maker, "video_indexes", side_effect=racing):
+            index, target = video_maker._publish("B001", tmp)
+        self.assertEqual(index, 2)
+        self.assertEqual((self.folder / "1.mp4").read_bytes(), b"other request")
+        self.assertEqual(target.read_bytes(), b"new")
 
     def test_ffmpeg_failure_leaves_no_partial_file(self):
         (self.folder / "1.jpg").write_bytes(b"not an image")

@@ -2,9 +2,8 @@
 
     python -m scripts.make_videos B001                  # منتج واحد
     python -m scripts.make_videos B001 B002 PK010       # عدة منتجات
-    python -m scripts.make_videos --all                 # كل المنتجات التي لا فيديو لها
-    python -m scripts.make_videos --all --overwrite     # إعادة بناء الكل (القديم يُنقل إلى MEDIA_BACKUP_DIR)
-    python -m scripts.make_videos B001 --duration 8 --fit crop
+    python -m scripts.make_videos --all                 # كل المنتجات التي لا فيديو لها (لا تُنشئ ثانياً لمن له فيديو)
+    python -m scripts.make_videos B001 --duration 8 --fit crop   # كل تشغيل يضيف فيديو جديداً برقم تالٍ، لا يستبدل شيئاً
     python -m scripts.make_videos B001 --audio music1.mp3   # دمج صوت من AUDIO_ROOT
     python -m scripts.make_videos --list-audio              # الملفات الصوتية المتاحة
 
@@ -22,8 +21,7 @@ from app.services.errors import ServiceError
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="بناء ريلز المنتجات من صورها")
     parser.add_argument("skus", nargs="*", help="رموز المنتجات (SKU)")
-    parser.add_argument("--all", action="store_true", help="كل المنتجات (التي لا فيديو لها فقط، إلا مع --overwrite)")
-    parser.add_argument("--overwrite", action="store_true", help="استبدال الفيديو الموجود")
+    parser.add_argument("--all", action="store_true", help="كل المنتجات التي لا فيديو لها (من له فيديو يُتجاوز)")
     parser.add_argument("--duration", type=float, default=video_maker.DEFAULT_DURATION, help="المدة بالثواني (الافتراضي 7)")
     parser.add_argument("--fit", choices=video_maker.FIT_MODES, default="blur",
                         help="blur: الصورة كاملة فوق خلفية مموّهة (الافتراضي)، crop: ملء الإطار بالقص")
@@ -49,18 +47,19 @@ def main(argv=None) -> int:
         done = skipped = failed = 0
         for sku in skus:
             try:
-                if args.all and not args.overwrite and video_maker.has_video(sku):
+                if args.all and video_maker.has_video(sku):
                     skipped += 1
                     continue
                 if args.dry_run:
                     n = len(video_maker.list_source_images(sku)[:video_maker.MAX_IMAGES])
-                    print(f"[dry-run] {sku}: {n} صورة -> {video_maker.public_video_url(sku)}")
+                    nxt = (video_maker.video_indexes(sku) or [0])[-1] + 1
+                    print(f"[dry-run] {sku}: {n} صورة -> {video_maker.public_video_url(sku, nxt)}")
                     continue
                 result = product_service.generate_product_video(
-                    db, sku, duration=args.duration, fit=args.fit, overwrite=args.overwrite, audio=args.audio,
+                    db, sku, duration=args.duration, fit=args.fit, audio=args.audio,
                 )
                 done += 1
-                print(f"✅ {sku}: {result.images_used} صورة، {result.size_bytes / 1024:.0f}KB -> {result.url}")
+                print(f"✅ {sku}: {result.index}.mp4 ← {result.images_used} صورة، {result.size_bytes / 1024:.0f}KB -> {result.url}")
             except (ServiceError, media.InvalidSkuError) as exc:
                 failed += 1
                 print(f"❌ {sku}: {exc}")

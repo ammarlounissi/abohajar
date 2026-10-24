@@ -75,16 +75,15 @@ def create_product_video(
     sku: str,
     duration: float = Query(7.0, ge=3, le=15, description="مدة الريلز بالثواني"),
     fit: Literal["blur", "crop"] = Query("blur", description="blur: الصورة كاملة فوق خلفية مموّهة، crop: ملء الإطار بالقص"),
-    overwrite: bool = Query(False, description="استبدال فيديو موجود (القديم يُنقل إلى MEDIA_BACKUP_DIR)"),
     audio: Optional[str] = Query(None, max_length=120, description="اسم ملف صوتي داخل AUDIO_ROOT لدمجه (اختياري)"),
     db: Session = Depends(get_db),
 ):
-    """يبني ريلز MP4 عمودي (720×1280) من صور المنتج بـ ffmpeg ويحفظ رابطه في المنتج.
+    """يبني ريلز MP4 عمودي (1080×1920، 30 إطاراً/ث، متوافق مع إنستغرام) من صور المنتج بـ ffmpeg ويحفظه برقم جديد في آخر تسلسل الفيديوهات (لا يستبدل أي فيديو). رابطه يصبح video_url للمنتج.
     دالة عادية (لا async) فيشغّلها FastAPI في خيط منفصل ولا تحجب باقي الطلبات."""
-    result = product_service.generate_product_video(db, sku, duration=duration, fit=fit, overwrite=overwrite, audio=audio)
+    result = product_service.generate_product_video(db, sku, duration=duration, fit=fit, audio=audio)
     return schemas.ProductVideoResponse(
         sku=result.sku, video_url=result.url, size_bytes=result.size_bytes,
-        duration=result.duration, images_used=result.images_used, replaced=result.replaced,
+        duration=result.duration, images_used=result.images_used, index=result.index,
         audio=result.audio,
     )
 
