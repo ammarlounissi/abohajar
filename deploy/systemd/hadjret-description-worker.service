@@ -1,0 +1,16 @@
+[Unit]
+Description=Hadjret Bladi Ollama description generation worker
+After=network.target
+
+[Service]
+Type=simple
+User=ammar
+WorkingDirectory=/home/ammar/abohajar
+ExecStart=/home/ammar/abohajar/venv/bin/python -m app.jobs.generate_factory_descriptions
+Restart=always
+RestartSec=5
+TimeoutStopSec=180
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

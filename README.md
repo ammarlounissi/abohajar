@@ -100,15 +100,30 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### عامل توليد الفيديوهات
+### عمال المهام الخلفية
 
-توليد الفيديو يعمل كعامل مستقل حتى لا يبقى طلب HTTP مفتوحاً أثناء تشغيل ffmpeg. بعد نشر الكود، طبّق ترحيل جدول المهام ثم ثبّت خدمة systemd (عدّل مسار المشروع والبيئة الافتراضية واسم المستخدم في ملف الوحدة إذا اختلفت إعدادات الخادم):
+توليد أوصاف Ollama والفيديوهات يعمل كعمال مستقلين، لا داخل طلب HTTP. بعد نشر الكود طبّق الترحيلات، وثبّت خدمة العامل المناسبة (عدّل مسار المشروع والبيئة الافتراضية واسم المستخدم في ملفات الوحدات إذا اختلفت إعدادات الخادم):
 
 ```bash
 alembic upgrade head
+sudo cp deploy/systemd/hadjret-description-worker.service /etc/systemd/system/
 sudo cp deploy/systemd/hadjret-video-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now hadjret-description-worker
 sudo systemctl enable --now hadjret-video-worker
+sudo systemctl status hadjret-description-worker
+sudo journalctl -u hadjret-description-worker -f
+```
+
+المسار `POST /api/chat/` يستقبل `{"factory_id":1}` فقط ويرجع `202 Accepted` مع `id` و`status_url` فور حفظ المهمة. تابع الحالة بواسطة `GET /api/chat/{factory_id}/jobs/{job_id}`؛ عند `succeeded` يوجد الوصف في `response`، وعند `failed` يظهر السبب في `error`. بعد نجاح المهمة فقط يُحفظ السؤال والجواب في `factory_chat_messages` ليُستخدم الجواب لاحقاً كوصف منشور. جدول `factory_description_jobs` خاص بحالة الطابور وبياناته التشغيلية، وليس جدولاً آخر للأوصاف. شغّل نسخة واحدة من عامل الأوصاف لهذه القاعدة، وراقب سجلاته عبر:
+
+```bash
+sudo journalctl -u hadjret-description-worker -f
+```
+
+توليد الفيديو يعمل أيضاً كعامل مستقل عن طلب HTTP:
+
+```bash
 sudo systemctl status hadjret-video-worker
 sudo journalctl -u hadjret-video-worker -f
 ```
@@ -154,12 +169,12 @@ curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: applicat
 curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"channel":"telegram","identifier":"123456789"}'
 
-# محادثة Ollama: يرسل تعليمات المشروع ونشاط المصنع وآخر خمسة تبادلات.
+# توليد وصف Ollama اعتماداً على نشاط المصنع وآخر خمسة تبادلات محفوظة.
 curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"factory_id":1,"prompt":"اكتب وصفاً قصيراً لهذا المنتج"}'
+  -d '{"factory_id":1}'
 ```
 
-يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) والنموذج `OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). يرسل تعليمات عامة ثابتة، واسم المصنع ونشاطه، وآخر خمسة أزواج سؤال/جواب فقط، بالإضافة إلى السؤال الجديد. أضف النشاط أو حدّثه عبر `POST/PATCH /api/factories/`. يتطلب تشغيل Ollama على نفس الجهاز/بيئة الشبكة التي يعمل فيها التطبيق وتحميل النموذج. إذا تعذر الاتصال أو لم يرد Ollama بنص، يرجع المسار `502`. طبّق `alembic upgrade head` لإضافة سجل المحادثات ونشاط المصنع إلى قاعدة البيانات.
+يقبل المسار `POST /api/chat/` بارامتراً واحداً فقط في جسم الطلب هو `factory_id`. يستخدم محتوى `factories.activity` كطلب للمساعد، مع بيانات المصنع وآخر خمسة تبادلات سؤال/جواب محفوظة كسياق. يحفظ التبادل في جدول `factory_chat_messages` الموجود: نص النشاط في `prompt` والوصف الناتج في `response`، ليُستخدم لاحقاً عند إنشاء المنشور. لا يُنشأ منشور ولا يحدث نشر في هذه المرحلة، ولا يحتاج هذا التغيير إلى جدول أو ترحيل جديد. أضف نشاط المصنع أو حدّثه عبر `POST/PATCH /api/factories/`. يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) و`OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). إذا كان نشاط المصنع فارغاً يرجع `422`، وإذا تعذر الاتصال أو لم يرجع Ollama وصفاً صالحاً يرجع `502`.
 
 ### مكتبة وسائط المصنع
 

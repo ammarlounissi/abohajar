@@ -102,6 +102,10 @@ class Factory(Base):
         "FactoryChatMessage", back_populates="factory", cascade="all, delete-orphan",
         order_by="FactoryChatMessage.id",
     )
+    description_jobs = relationship(
+        "FactoryDescriptionJob", back_populates="factory", cascade="all, delete-orphan",
+        order_by="FactoryDescriptionJob.id",
+    )
 
 
 class FactoryChatMessage(Base):
@@ -115,6 +119,26 @@ class FactoryChatMessage(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now)
 
     factory = relationship("Factory", back_populates="chat_messages")
+
+
+class FactoryDescriptionJob(Base):
+    """طلب دائم لتوليد وصف عبر عامل Ollama الخلفي."""
+    __tablename__ = "factory_description_jobs"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    messages = Column(JSON, nullable=False)
+    model = Column(String(100), nullable=False)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    response = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    factory = relationship("Factory", back_populates="description_jobs")
 
 
 class FactoryContact(Base):

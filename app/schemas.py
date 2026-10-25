@@ -53,21 +53,29 @@ class FactoryResponse(FactoryBase):
 
 class FactoryChatRequest(BaseModel):
     factory_id: int = Field(gt=0)
-    prompt: str = Field(min_length=1, max_length=20000)
-
-    @field_validator("prompt", mode="before")
-    @classmethod
-    def strip_prompt(cls, value):
-        return value.strip() if isinstance(value, str) else value
+    model_config = ConfigDict(extra="forbid")
 
 
-class FactoryChatResponse(BaseModel):
+class FactoryDescriptionJobAccepted(BaseModel):
+    id: int
+    factory_id: int
+    status: Literal["queued"]
+    status_url: str
+
+
+class FactoryDescriptionJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     factory_id: int
     prompt: str
-    response: str
     model: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    response: Optional[str] = None
+    error: Optional[str] = None
     created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
 
 class FactoryContactCreate(BaseModel):
