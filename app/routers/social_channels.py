@@ -22,10 +22,11 @@ def create_channel(channel: schemas.SocialChannelCreate, db: Session = Depends(g
 def get_channels(
     platform: Optional[schemas.ChannelPlatform] = Query(None),
     is_active: Optional[bool] = Query(None),
+    factory_id: Optional[int] = Query(None, gt=0),
     db: Session = Depends(get_db),
 ):
-    """كل القنوات، مع تصفية اختيارية بالمنصة و/أو الحالة (is_active=true للمفعّلة فقط)."""
-    return channel_service.list_channels(db, platform, is_active)
+    """القنوات مع تصفية اختيارية بالمصنع والمنصة والحالة."""
+    return channel_service.list_channels(db, platform, is_active, factory_id)
 
 
 @router.get("/{channel_id}", response_model=schemas.SocialChannelResponse)

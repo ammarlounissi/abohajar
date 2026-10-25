@@ -34,9 +34,11 @@ VIDEO_EXT = ".mp4"
 
 DEFAULT_DURATION = 7.0
 MIN_DURATION, MAX_DURATION = 3.0, 15.0
+MAX_FACTORY_DURATION = 60.0
 MAX_IMAGES = 6                           # أكثر من ذلك يجعل كل لقطة أقصر من أن تُرى
 CROSSFADE = 0.5
 MAX_BYTES = 10 * 1024 * 1024            # حد عملي لـ 1080p قصير (حد إنستغرام نفسه أعلى بكثير)
+MAX_FACTORY_VIDEO_BYTES = 100 * 1024 * 1024
 FFMPEG_TIMEOUT = 300
 
 AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".ogg")
@@ -223,9 +225,54 @@ def _run_ffmpeg(
         raise VideoRenderError("تعذّر بناء الفيديو من الصور (راجع سجل الخادم)")
 
 
+def render_video_file(
+    images: List[Path], output: Path, *, duration: float, fit: str = "blur",
+    audio: Optional[Path], max_bytes: int,
+) -> int:
+    """يرندر صوراً إلى ملف مؤقت، ويعيد المحاولة بجودة أقل عند تجاوز حد الحجم."""
+    if not images:
+        raise NotFoundError("لا توجد صور لبناء الفيديو")
+    if not (MIN_DURATION <= duration <= 60):
+        raise InvalidInputError("مدة الفيديو يجب أن تكون بين 3 و60 ثانية")
+
+    ffmpeg = ffmpeg_tools.find_tool("ffmpeg")
+    if not ffmpeg:
+        raise VideoToolMissingError(
+            "ffmpeg غير موجود للخدمة. ثبّته (sudo apt install ffmpeg) أو حدّد مساره في .env: FFMPEG_BIN=/usr/bin/ffmpeg"
+        )
+    _run_ffmpeg(ffmpeg, images, duration, fit, 23, output, audio)
+    if output.stat().st_size > max_bytes:
+        logger.info("Video is %d bytes, re-encoding smaller", output.stat().st_size)
+        _run_ffmpeg(ffmpeg, images, duration, fit, 28, output, audio)
+    size = output.stat().st_size
+    if size > max_bytes:
+        raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
+    return size
+
+
 def create_product_video(
     sku: str, *, duration: float = DEFAULT_DURATION, fit: str = "blur", audio: Optional[str] = None,
     factory_id: Optional[int] = None,
+) -> VideoResult:
+    return _create_product_video(
+        sku, duration=duration, fit=fit, audio=audio, factory_id=factory_id,
+        max_duration=MAX_DURATION, max_bytes=MAX_BYTES,
+    )
+
+
+def create_factory_product_video(
+    sku: str, *, duration: float, audio: Optional[str], factory_id: int,
+) -> VideoResult:
+    """يبني فيديو مصنع حتى دقيقة ويحفظه في مجلد المنتج."""
+    return _create_product_video(
+        sku, duration=duration, fit="blur", audio=audio, factory_id=factory_id,
+        max_duration=MAX_FACTORY_DURATION, max_bytes=MAX_FACTORY_VIDEO_BYTES,
+    )
+
+
+def _create_product_video(
+    sku: str, *, duration: float, fit: str, audio: Optional[str],
+    factory_id: Optional[int], max_duration: float, max_bytes: int,
 ) -> VideoResult:
     """يبني فيديو جديداً في آخر تسلسل فيديوهات المنتج ({SKU}/{n}.mp4) دون المساس بأي فيديو قائم.
     لا يلمس قاعدة البيانات. NotFoundError: لا صور للمنتج. InvalidInputError: مدخل غير صالح.
@@ -234,8 +281,8 @@ def create_product_video(
         raise InvalidInputError("رمز المنتج (SKU) غير صالح")
     if fit not in FIT_MODES:
         raise InvalidInputError(f"طريقة الملاءمة يجب أن تكون إحدى: {', '.join(FIT_MODES)}")
-    if not (MIN_DURATION <= duration <= MAX_DURATION):
-        raise InvalidInputError(f"مدة الفيديو يجب أن تكون بين {MIN_DURATION:g} و{MAX_DURATION:g} ثانية")
+    if not (MIN_DURATION <= duration <= max_duration):
+        raise InvalidInputError(f"مدة الفيديو يجب أن تكون بين {MIN_DURATION:g} و{max_duration:g} ثانية")
     if media.media_root_for(factory_id) is None:
         raise InvalidInputError("MEDIA_ROOT غير مضبوط")
 
@@ -245,23 +292,13 @@ def create_product_video(
     if not images:
         raise NotFoundError("لا توجد صور لهذا المنتج لبناء فيديو منها")
 
-    ffmpeg = ffmpeg_tools.find_tool("ffmpeg")
-    if not ffmpeg:
-        raise VideoToolMissingError(
-            "ffmpeg غير موجود للخدمة. ثبّته (sudo apt install ffmpeg) أو حدّد مساره في .env: FFMPEG_BIN=/usr/bin/ffmpeg"
-        )
-
     folder = media.product_dir(sku, factory_id)
     # نبني في ملف مؤقت ثم ننشره باسمه النهائي، فلا يرى Nginx ولا Syncthing ملفاً ناقصاً (.tmp مُتجاهَل)
     tmp = folder / f".video-{uuid.uuid4().hex}.tmp"
     try:
-        _run_ffmpeg(ffmpeg, images, duration, fit, 23, tmp, audio_path)
-        if tmp.stat().st_size > MAX_BYTES:                 # إعادة بجودة أقل مرة واحدة
-            logger.info("%s video is %d bytes, re-encoding smaller", sku, tmp.stat().st_size)
-            _run_ffmpeg(ffmpeg, images, duration, fit, 28, tmp, audio_path)
-        size = tmp.stat().st_size
-        if size > MAX_BYTES:
-            raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
+        size = render_video_file(
+            images, tmp, duration=duration, fit=fit, audio=audio_path, max_bytes=max_bytes,
+        )
         index, target = _publish(sku, tmp, factory_id)
     finally:
         tmp.unlink(missing_ok=True)

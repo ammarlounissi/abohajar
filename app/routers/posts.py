@@ -125,6 +125,13 @@ def update_post(post_id: int, update: schemas.PostUpdate, db: Session = Depends(
         models.Factory.id == values["factory_id"]
     ).first():
         raise HTTPException(status_code=404, detail="المصنع غير موجود")
+    if "factory_id" in values and channel_ids is None:
+        foreign = [
+            delivery.channel_id for delivery in post.deliveries
+            if delivery.channel.factory_id != values["factory_id"]
+        ]
+        if foreign:
+            raise HTTPException(status_code=422, detail=f"قنوات لا تتبع مصنع المنشور: {', '.join(map(str, foreign))}")
     for key, value in values.items():
         setattr(post, key, value)
     if channel_ids is not None:

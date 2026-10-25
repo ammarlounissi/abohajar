@@ -42,6 +42,11 @@ def create_ready_posts(
     missing_channels = [channel_id for channel_id in requested_channels if channel_id not in channels]
     if missing_channels:
         raise NotFoundError(f"قنوات غير موجودة: {', '.join(map(str, missing_channels))}")
+    foreign_channels = [
+        channel_id for channel_id in requested_channels if channels[channel_id].factory_id != factory_id
+    ]
+    if foreign_channels:
+        raise InvalidInputError(f"قنوات لا تتبع المصنع: {', '.join(map(str, foreign_channels))}")
     inactive_channels = [channel_id for channel_id in requested_channels if not channels[channel_id].is_active]
     if inactive_channels:
         raise InvalidInputError(f"قنوات معطّلة: {', '.join(map(str, inactive_channels))}")

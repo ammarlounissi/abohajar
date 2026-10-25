@@ -33,11 +33,15 @@ def main(argv=None) -> int:
         if not product:
             print(f"❌ لا منتج بالرمز {args.sku}")
             return 1
-        channel_ids = list(dict.fromkeys(args.channel)) or post_publisher.active_channel_ids(db)
+        channel_ids = list(dict.fromkeys(args.channel)) or post_publisher.active_channel_ids(db, product.factory_id)
         channels = {c.id: c for c in db.query(models.SocialChannel).filter(models.SocialChannel.id.in_(channel_ids))}
         unknown = [c for c in channel_ids if c not in channels]
-        if unknown or not channels:
-            print(f"❌ قنوات غير موجودة أو لا قناة مفعّلة: {unknown or 'سجّل قناة في /api/social-channels'}")
+        foreign = [cid for cid, channel in channels.items() if channel.factory_id != product.factory_id]
+        if unknown or foreign or not channels:
+            print(
+                "❌ القنوات غير موجودة أو لا تتبع مصنع المنتج أو لا توجد قناة مفعّلة: "
+                f"{unknown or foreign or 'سجّل قناة للمصنع في /api/social-channels'}"
+            )
             return 1
         captions = {cid: build_caption(product, channels[cid].platform, args.phone) for cid in channel_ids}
 

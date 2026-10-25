@@ -58,7 +58,9 @@ class Base_(unittest.TestCase):
         # قناة لكل منصة، ومعرّفها الداخلي في self.ch (tiktok بلا محوّل لاختبار المنصة غير المدعومة)
         self.ch = {}
         for i, (platform, remote) in enumerate((("facebook", "111111"), ("instagram", "222222"), ("tiktok", "333333")), 1):
-            self.db.add(models.SocialChannel(id=i, platform=platform, name=platform, remote_id=remote))
+            self.db.add(models.SocialChannel(
+                id=i, factory_id=1, platform=platform, name=platform, remote_id=remote,
+            ))
             self.ch[platform] = i
         self.db.commit()
         for name, value in (("PUBLISH_DAILY_LIMIT", 50), ("PUBLISH_STALE_MINUTES", 30)):

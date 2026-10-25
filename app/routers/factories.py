@@ -7,6 +7,7 @@ from app import schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import factories as factory_service
+from app.services import factory_videos
 from app.services import media_library
 
 router = APIRouter(prefix="/api/factories", tags=["factories"], dependencies=[Depends(require_admin)])
@@ -113,3 +114,40 @@ def upload_factory_media(
 def delete_factory_media(factory_id: int, media_id: int, db: Session = Depends(get_db)):
     media_library.delete_factory_media(db, factory_id, media_id)
     return {"status": "success", "message": "تم حذف الوسيط من مكتبة المصنع"}
+
+
+@router.get("/{factory_id}/videos/options", response_model=schemas.FactoryVideoOptionsResponse)
+def get_factory_video_options(factory_id: int, db: Session = Depends(get_db)):
+    """خيارات توليد فيديو المصنع: المنتجات ذات الصور، الأصوات، وصور المكتبة المتاحة."""
+    return factory_videos.get_video_options(db, factory_id)
+
+
+@router.post(
+    "/{factory_id}/videos/generate",
+    response_model=schemas.FactoryVideoResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_factory_video(
+    factory_id: int,
+    request: schemas.FactoryVideoGenerateRequest,
+    db: Session = Depends(get_db),
+):
+    """ينشئ فيديو حتى دقيقة بخلفية مموهة، ويحفظه مع المنتج أو في مكتبة المصنع."""
+    result = factory_videos.generate_factory_video(
+        db,
+        factory_id,
+        source=request.source,
+        sku=request.sku,
+        duration=request.duration,
+        audio=request.audio,
+    )
+    return schemas.FactoryVideoResponse(
+        factory_id=result.factory_id,
+        source=result.source,
+        sku=result.sku,
+        video_url=result.url,
+        size_bytes=result.size_bytes,
+        duration=result.duration,
+        images_used=result.images_used,
+        audio=result.audio,
+    )

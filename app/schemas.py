@@ -105,8 +105,59 @@ class FactoryMediaResponse(BaseModel):
     factory_id: int
 
 
+class FactoryVideoGenerateRequest(BaseModel):
+    source: Literal["specific_product", "random_product", "library"] = "random_product"
+    sku: Optional[str] = Field(default=None, min_length=2, max_length=50)
+    audio: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    duration: float = Field(default=30, ge=3, le=60)
+
+    @field_validator("sku", mode="before")
+    @classmethod
+    def normalize_video_sku(cls, value):
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("audio", mode="before")
+    @classmethod
+    def strip_video_audio(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_source_sku(self):
+        if self.source == "specific_product" and not self.sku:
+            raise ValueError("رمز SKU مطلوب عند اختيار منتج محدد")
+        if self.source != "specific_product" and self.sku is not None:
+            raise ValueError("رمز SKU يقبل فقط عند اختيار منتج محدد")
+        return self
+
+
+class FactoryVideoProductOption(BaseModel):
+    sku: str
+    title: str
+
+
+class FactoryVideoOptionsResponse(BaseModel):
+    factory_id: int
+    products: List[FactoryVideoProductOption]
+    audio_files: List[str]
+    default_audio: Optional[str] = None
+    library_images_count: int
+    max_duration: float
+
+
+class FactoryVideoResponse(BaseModel):
+    factory_id: int
+    source: Literal["specific_product", "random_product", "library"]
+    sku: Optional[str] = None
+    video_url: str
+    size_bytes: int
+    duration: float
+    images_used: int
+    audio: Optional[str] = None
+
+
 # --- قنوات النشر ---
 class SocialChannelCreate(BaseModel):
+    factory_id: int = Field(gt=0)
     platform: ChannelPlatform
     name: str = Field(min_length=1, max_length=100)
     remote_id: str = Field(min_length=1, max_length=100)    # صيغته تُفحص حسب المنصة في الخدمة
@@ -142,6 +193,7 @@ class SocialChannelResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    factory_id: int
     platform: str
     name: str
     remote_id: str

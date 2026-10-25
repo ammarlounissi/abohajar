@@ -92,6 +92,7 @@ class Factory(Base):
 
     products = relationship("Product", back_populates="factory")
     posts = relationship("Post", back_populates="factory")
+    social_channels = relationship("SocialChannel", back_populates="factory")
     media_items = relationship("Media", back_populates="factory", cascade="all, delete-orphan")
     contacts = relationship("FactoryContact", back_populates="factory", cascade="all, delete-orphan")
     chat_messages = relationship(
@@ -143,7 +144,7 @@ class Media(Base):
 
 class SocialChannel(Base):
     """قناة نشر (صفحة فيسبوك / حساب إنستغرام احترافي / قناة تيليجرام). تغني عن حفظ المعرّفات في الإعدادات:
-    رمز ميتا نفسه يخدم أي صفحة تُضاف إلى الحافظة، فيكفي تسجيل معرّفها هنا.
+    القناة تتبع مصنعاً واحداً، ورمز ميتا نفسه يخدم عدة صفحات للمصنع.
     remote_id هو المعرّف الأصلي عند المنصة، وis_active=False يوقف النشر إليها دون حذفها.
     (اسم الصنف ليس Channel لأن Channel قائم أصلاً لقنوات محادثة المصانع.)"""
     __tablename__ = "social_channels"
@@ -155,6 +156,9 @@ class SocialChannel(Base):
     remote_id = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=utc_now)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+
+    factory = relationship("Factory", back_populates="social_channels")
 
     @property
     def label(self) -> str:

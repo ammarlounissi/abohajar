@@ -55,7 +55,9 @@ class Base_(unittest.TestCase):
         self.log = []
 
     def channel(self, platform, remote_id, active=True) -> int:
-        channel = models.SocialChannel(platform=platform, name=remote_id, remote_id=remote_id, is_active=active)
+        channel = models.SocialChannel(
+            factory_id=1, platform=platform, name=remote_id, remote_id=remote_id, is_active=active,
+        )
         self.db.add(channel)
         self.db.commit()
         return channel.id
@@ -96,6 +98,15 @@ class SetChannelsTests(Base_):
             post_publisher.set_channels(self.db, post, [ok, off])
         self.assertEqual(post.deliveries, [])        # الطلب المرفوض لا يترك أثراً
 
+    def test_channels_from_another_factory_are_rejected(self):
+        self.db.add(models.Factory(id=2, name="مصنع آخر", phone_number="213550000001"))
+        self.db.commit()
+        channel = models.SocialChannel(factory_id=2, platform="facebook", name="صفحة", remote_id="333333")
+        self.db.add(channel)
+        self.db.commit()
+        with self.assertRaises(InvalidInputError):
+            post_publisher.set_channels(self.db, self.post(), [channel.id])
+
     def test_replace_drops_pending_and_failed_but_keeps_published(self):
         a, b, c = (self.channel("facebook", x) for x in ("111111", "222222", "333333"))
         post = self.post(a, b, c)
@@ -121,8 +132,8 @@ class SetChannelsTests(Base_):
     def test_active_channel_ids(self):
         fb, ig = self.channel("facebook", "111111"), self.channel("instagram", "222222")
         self.channel("facebook", "333333", active=False)
-        self.assertEqual(post_publisher.active_channel_ids(self.db), [fb, ig])
-        self.assertEqual(post_publisher.active_channel_ids(self.db, "instagram"), [ig])
+        self.assertEqual(post_publisher.active_channel_ids(self.db, 1), [fb, ig])
+        self.assertEqual(post_publisher.active_channel_ids(self.db, 1, "instagram"), [ig])
 
     def test_channel_with_deliveries_cannot_be_deleted(self):
         a, b = self.channel("facebook", "111111"), self.channel("facebook", "222222")

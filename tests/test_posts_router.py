@@ -28,9 +28,15 @@ class RouterCase(unittest.TestCase):
         self.Session = sessionmaker(bind=engine)
         with self.Session() as db:
             db.add(models.Factory(id=1, name="مصنع", phone_number="213550000000"))
-            db.add(models.SocialChannel(id=1, platform="facebook", name="صفحة", remote_id="111111"))
-            db.add(models.SocialChannel(id=2, platform="instagram", name="حساب", remote_id="222222"))
-            db.add(models.SocialChannel(id=3, platform="facebook", name="صفحة معطّلة", remote_id="333333", is_active=False))
+            db.add(models.Factory(id=2, name="مصنع آخر", phone_number="213550000001"))
+            db.add(models.SocialChannel(id=1, factory_id=1, platform="facebook", name="صفحة", remote_id="111111"))
+            db.add(models.SocialChannel(id=2, factory_id=1, platform="instagram", name="حساب", remote_id="222222"))
+            db.add(models.SocialChannel(
+                id=3, factory_id=1, platform="facebook", name="صفحة معطّلة", remote_id="333333", is_active=False,
+            ))
+            db.add(models.SocialChannel(
+                id=4, factory_id=2, platform="facebook", name="صفحة أخرى", remote_id="444444",
+            ))
             db.commit()
 
         app = FastAPI()
@@ -134,6 +140,18 @@ class ChannelSelectionTests(RouterCase):
         self.assertEqual(self.client.post("/api/posts/", json={**self.BODY, "channel_ids": [3]}).status_code, 422)  # معطّلة
         self.assertEqual(self.client.post("/api/posts/", json={**self.BODY, "channel_ids": ["x"]}).status_code, 422)
         self.assertEqual(self.client.get("/api/posts/").json(), [])
+
+    def test_channels_must_belong_to_the_post_factory(self):
+        self.assertEqual(
+            self.client.post("/api/posts/", json={**self.BODY, "channel_ids": [4]}).status_code, 422,
+        )
+        post_id = self.add_post(PostStatus.DRAFT, channels=(1,))
+        self.assertEqual(self.client.patch(
+            f"/api/posts/{post_id}", json={"factory_id": 2},
+        ).status_code, 422)
+        self.assertEqual(self.client.post("/api/posts/prepare/all", json={
+            "factory_id": 1, "channel_ids": [4],
+        }).status_code, 422)
 
     def test_patch_replaces_channels(self):
         post_id = self.add_post(PostStatus.DRAFT, channels=(1,))

@@ -81,9 +81,11 @@ def _label(delivery: models.PostDelivery) -> str:
 SETTABLE = (PostStatus.DRAFT, PostStatus.SCHEDULED, PostStatus.APPROVED, PostStatus.FAILED)
 
 
-def active_channel_ids(db: Session, platform: Optional[str] = None) -> List[int]:
-    """معرّفات القنوات المفعّلة (كلها أو لمنصة واحدة): الاختيار الافتراضي عند إنشاء منشور."""
-    query = select(models.SocialChannel.id).where(models.SocialChannel.is_active.is_(True))
+def active_channel_ids(db: Session, factory_id: int, platform: Optional[str] = None) -> List[int]:
+    """معرّفات قنوات المصنع المفعّلة (كلها أو لمنصة واحدة)."""
+    query = select(models.SocialChannel.id).where(
+        models.SocialChannel.is_active.is_(True), models.SocialChannel.factory_id == factory_id,
+    )
     if platform:
         query = query.where(models.SocialChannel.platform == platform)
     return list(db.scalars(query.order_by(models.SocialChannel.id)))
@@ -102,7 +104,18 @@ def set_channels(db: Session, post: models.Post, channel_ids: Iterable[int]) -> 
     missing = [c for c in wanted if c not in channels]
     if missing:
         raise NotFoundError(f"قنوات غير موجودة: {', '.join(map(str, missing))}")
+    foreign = [c for c in wanted if channels[c].factory_id != post.factory_id]
+    if foreign:
+        raise InvalidInputError(f"قنوات لا تتبع مصنع المنشور: {', '.join(map(str, foreign))}")
     current = {d.channel_id: d for d in post.deliveries}
+    foreign_published = [
+        channel_id for channel_id, delivery in current.items()
+        if delivery.status == DeliveryStatus.PUBLISHED.value and delivery.channel.factory_id != post.factory_id
+    ]
+    if foreign_published:
+        raise InvalidInputError(
+            f"قنوات منشورة لا تتبع مصنع المنشور: {', '.join(map(str, foreign_published))}"
+        )
     inactive = [c for c in wanted if c not in current and not channels[c].is_active]
     if inactive:
         raise InvalidInputError(f"قنوات معطّلة: {', '.join(map(str, inactive))}")

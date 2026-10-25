@@ -108,6 +108,11 @@ def main(argv=None) -> int:
                 print("🔎 عرض فقط، أضف --apply للحذف.")
             return 0
 
+        factory_id = args.factory_id or _default_factory(db)
+        if not factory_id or not db.get(models.Factory, factory_id):
+            print("❌ لا مصنع صالح: مرّر --factory-id أو اضبط DEFAULT_FACTORY_ID")
+            return 2
+
         overrides: Dict[str, int] = {}      # {منصة: معرّف القناة الداخلي} من --channel
         for item in args.channel:
             platform, _, remote_id = item.partition(":")
@@ -117,7 +122,8 @@ def main(argv=None) -> int:
                 return 2
             known = db.scalar(select(models.SocialChannel.id).where(
                 models.SocialChannel.platform == platform,
-                models.SocialChannel.remote_id == remote_id, models.SocialChannel.is_active.is_(True)))
+                models.SocialChannel.remote_id == remote_id, models.SocialChannel.is_active.is_(True),
+                models.SocialChannel.factory_id == factory_id))
             if not known:
                 print(f"❌ القناة {item} غير مسجلة أو غير مفعّلة في social_channels")
                 return 2
@@ -126,13 +132,11 @@ def main(argv=None) -> int:
         def channel_ids_for(platforms: str) -> List[int]:
             ids: List[int] = []
             for platform in platforms.split(","):
-                ids += [overrides[platform]] if platform in overrides else post_publisher.active_channel_ids(db, platform)
+                ids += [overrides[platform]] if platform in overrides else post_publisher.active_channel_ids(
+                    db, factory_id, platform,
+                )
             return list(dict.fromkeys(ids))
 
-        factory_id = args.factory_id or _default_factory(db)
-        if not factory_id or not db.get(models.Factory, factory_id):
-            print("❌ لا مصنع صالح: مرّر --factory-id أو اضبط DEFAULT_FACTORY_ID")
-            return 2
         image_url = args.image_url or _default_image(db)
         if not image_url:
             print("❌ لا صورة JPEG: مرّر --image-url (رابط عام يفتح من الإنترنت)")

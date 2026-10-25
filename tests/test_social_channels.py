@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import models
 from app.core.database import Base, get_db
 from app.core.security import require_admin
 from app.routers import social_channels as channels_router
@@ -41,6 +42,9 @@ class RouterCase(unittest.TestCase):
         engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         Base.metadata.create_all(engine)
         self.Session = sessionmaker(bind=engine)
+        with self.Session() as db:
+            db.add(models.Factory(id=1, name="مصنع", phone_number="213550000000"))
+            db.commit()
         app = FastAPI()
         app.include_router(channels_router.router)
 
@@ -60,9 +64,9 @@ class RouterCase(unittest.TestCase):
         app.dependency_overrides[require_admin] = lambda: None
         self.client = TestClient(app)
 
-    def create(self, platform="facebook", name="صفحة", remote_id="123456789012345", **kw):
+    def create(self, platform="facebook", name="صفحة", remote_id="123456789012345", factory_id=1, **kw):
         return self.client.post("/api/social-channels/", json={
-            "platform": platform, "name": name, "remote_id": remote_id, **kw})
+            "factory_id": factory_id, "platform": platform, "name": name, "remote_id": remote_id, **kw})
 
 
 class CrudTests(RouterCase):
@@ -70,8 +74,8 @@ class CrudTests(RouterCase):
         r = self.create()
         self.assertEqual(r.status_code, 201)
         body = r.json()
-        self.assertEqual((body["platform"], body["name"], body["remote_id"], body["is_active"]),
-                         ("facebook", "صفحة", "123456789012345", True))
+        self.assertEqual((body["factory_id"], body["platform"], body["name"], body["remote_id"], body["is_active"]),
+                         (1, "facebook", "صفحة", "123456789012345", True))
 
     def test_create_inactive(self):
         self.assertFalse(self.create(is_active=False).json()["is_active"])
@@ -84,6 +88,7 @@ class CrudTests(RouterCase):
         self.assertEqual(self.create(platform="tiktok").status_code, 422)
         self.assertEqual(self.create(remote_id="not-a-number").status_code, 422)
         self.assertEqual(self.create(name="   ").status_code, 422)
+        self.assertEqual(self.create(factory_id=999).status_code, 404)
 
     def test_duplicate_same_platform_rejected_but_other_platform_allowed(self):
         self.assertEqual(self.create().status_code, 201)
@@ -100,6 +105,12 @@ class CrudTests(RouterCase):
         self.assertEqual(len(get("?is_active=true")), 2)
         self.assertEqual([c["remote_id"] for c in get("?is_active=false")], ["222222222"])
         self.assertEqual(self.client.get("/api/social-channels/?platform=tiktok").status_code, 422)
+        with self.Session() as db:
+            db.add(models.Factory(id=2, name="مصنع آخر", phone_number="213550000001"))
+            db.commit()
+        self.create(remote_id="333333333", factory_id=2)
+        self.assertEqual([c["factory_id"] for c in get("?factory_id=2")], [2])
+        self.assertEqual(self.client.get("/api/social-channels/?factory_id=0").status_code, 422)
 
     def test_get_one_and_404(self):
         cid = self.create().json()["id"]
@@ -139,8 +150,13 @@ class CrudTests(RouterCase):
         self.create(remote_id="111111111")
         self.create(remote_id="222222222", is_active=False)
         with self.Session() as db:
-            self.assertEqual([c.remote_id for c in service.list_active(db, "facebook")], ["111111111"])
-
+            db.add(models.Factory(id=2, name="مصنع آخر", phone_number="213550000001"))
+            db.commit()
+        self.create(remote_id="333333333", factory_id=2)
+        with self.Session() as db:
+            self.assertEqual(
+                [c.remote_id for c in service.list_active(db, "facebook", 1)], ["111111111"],
+            )
 
 if __name__ == "__main__":
     unittest.main()
