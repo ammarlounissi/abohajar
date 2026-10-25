@@ -5,6 +5,6 @@ Description=Hadjret Bladi scheduled social publishing
 Type=oneshot
 # لا يبدأ تشغيل جديد من المؤقت ما دام السابق يعمل؛ هذه المهلة تمنع تعليق النشر (انتظار إنستغرام للفيديو)
 TimeoutStartSec=600
-User=fastapi_user
+User=ammar
 WorkingDirectory=/home/ammar/abohajar
-ExecStart=/home/ammar/abohajar/.venv/bin/python -m app.jobs.publish_due
+ExecStart=/home/ammar/abohajar/venv/bin/python -m app.jobs.publish_due

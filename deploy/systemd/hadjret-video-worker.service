@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=fastapi_user
+User=ammar
 WorkingDirectory=/home/ammar/abohajar
-ExecStart=/home/ammar/abohajar/.venv/bin/python -m app.jobs.generate_factory_videos
+ExecStart=/home/ammar/abohajar/venv/bin/python -m app.jobs.generate_factory_videos
 Restart=always
 RestartSec=5
 TimeoutStopSec=720
