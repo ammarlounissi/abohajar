@@ -109,7 +109,8 @@ class FactoryVideoGenerateRequest(BaseModel):
     source: Literal["specific_product", "random_product", "library"] = "random_product"
     sku: Optional[str] = Field(default=None, min_length=2, max_length=50)
     audio: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    duration: float = Field(default=30, ge=3, le=60)
+    template: str = Field(default="cinematic_30", min_length=1, max_length=40)
+    duration: Optional[float] = Field(default=None, ge=3, le=60)
 
     @field_validator("sku", mode="before")
     @classmethod
@@ -135,18 +136,28 @@ class FactoryVideoProductOption(BaseModel):
     title: str
 
 
+class FactoryVideoTemplateOption(BaseModel):
+    id: str
+    name: str
+    duration: float
+    max_images: int
+
+
 class FactoryVideoOptionsResponse(BaseModel):
     factory_id: int
     products: List[FactoryVideoProductOption]
     audio_files: List[str]
     default_audio: Optional[str] = None
+    default_template: str
     library_images_count: int
     max_duration: float
+    templates: List[FactoryVideoTemplateOption]
 
 
 class FactoryVideoResponse(BaseModel):
     factory_id: int
     source: Literal["specific_product", "random_product", "library"]
+    template: str
     sku: Optional[str] = None
     video_url: str
     size_bytes: int

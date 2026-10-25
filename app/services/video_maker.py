@@ -48,6 +48,41 @@ AUDIO_FADE_IN, AUDIO_FADE_OUT = 0.5, 1.0
 FIT_MODES = ("blur", "crop")             # blur: الصورة كاملة فوق خلفية مموّهة، crop: ملء الإطار بالقص
 
 
+@dataclass(frozen=True)
+class VideoTemplate:
+    id: str
+    name: str
+    duration: float
+    max_images: int
+    motion: str
+    transition: str
+    crossfade: float
+    card: bool = False
+
+
+VIDEO_TEMPLATES = (
+    VideoTemplate("cinematic_7", "سينمائي قصير", 7, 4, "cinematic", "fade", 0.65),
+    VideoTemplate("quick_7", "حيوي سريع قصير", 7, 6, "fast", "smoothleft", 0.2),
+    VideoTemplate("detail_7", "تفاصيل المنتج", 7, 4, "detail", "fadeblack", 0.3),
+    VideoTemplate("cinematic_15", "سينمائي متوسط", 15, 8, "cinematic", "fade", 0.65),
+    VideoTemplate("dynamic_15", "حيوي متوسط", 15, 9, "fast", "wipeleft", 0.2),
+    VideoTemplate("cards_15", "بطاقات المنتج", 15, 8, "showcase", "fade", 0.4, card=True),
+    VideoTemplate("cinematic_30", "سينمائي طويل", 30, 12, "cinematic", "fade", 0.7),
+    VideoTemplate("dynamic_30", "حيوي طويل", 30, 15, "fast", "smoothleft", 0.2),
+    VideoTemplate("showcase_30", "استعراض متنوع", 30, 15, "showcase", "circleopen", 0.35),
+    VideoTemplate("cards_30", "بطاقات متعددة", 30, 12, "showcase", "fade", 0.4, card=True),
+)
+VIDEO_TEMPLATES_BY_ID = {template.id: template for template in VIDEO_TEMPLATES}
+DEFAULT_FACTORY_TEMPLATE = "cinematic_30"
+
+
+def get_video_template(template_id: str) -> VideoTemplate:
+    template = VIDEO_TEMPLATES_BY_ID.get(template_id)
+    if template is None:
+        raise InvalidInputError("قالب الفيديو غير معروف")
+    return template
+
+
 class VideoToolMissingError(ServiceError):
     """ffmpeg غير مثبت على الخادم."""
 
@@ -114,19 +149,33 @@ def _clip_seconds(duration: float, count: int) -> float:
     return (duration + (count - 1) * CROSSFADE) / count
 
 
-def build_filter_graph(count: int, duration: float, fit: str) -> str:
+def build_filter_graph(
+    count: int, duration: float, fit: str, template: Optional[VideoTemplate] = None,
+) -> str:
     """يبني filter_complex لعدد count من الصور (مدخل ffmpeg رقم i لكل صورة).
     كل لقطة: تركيب على لوحة 1080×1920، ثم zoompan (تكبير تدريجي)، ثم xfade بين اللقطات."""
-    clip = _clip_seconds(duration, count)
+    crossfade = template.crossfade if template else CROSSFADE
+    clip = (duration + (count - 1) * crossfade) / count
     frames = max(2, round(clip * FPS))
     parts = []
     for i in range(count):
         if fit == "blur":
+            if template and template.card:
+                foreground = (
+                    f"[fg{i}]scale={CANVAS_W - 160}:{CANVAS_H - 160}:"
+                    f"force_original_aspect_ratio=decrease,"
+                    f"pad=iw+80:ih+80:40:40:white[f{i}]"
+                )
+            else:
+                foreground = (
+                    f"[fg{i}]scale={CANVAS_W}:{CANVAS_H}:"
+                    f"force_original_aspect_ratio=decrease[f{i}]"
+                )
             compose = (
                 f"[{i}:v]split=2[bg{i}][fg{i}];"
                 f"[bg{i}]scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=increase,"
                 f"crop={CANVAS_W}:{CANVAS_H},boxblur=30:5[b{i}];"
-                f"[fg{i}]scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=decrease[f{i}];"
+                f"{foreground};"
                 f"[b{i}][f{i}]overlay=(W-w)/2:(H-h)/2,setsar=1[c{i}]"
             )
         else:
@@ -135,11 +184,21 @@ def build_filter_graph(count: int, duration: float, fit: str) -> str:
                 f"crop={CANVAS_W}:{CANVAS_H},setsar=1[c{i}]"
             )
         parts.append(compose)
-        # تكبير من 1.0 إلى 1.10 على مدى اللقطة؛ اللقطات الزوجية تبدأ مكبّرة وتتراجع لتنويع الحركة
-        step = 0.10 / frames
-        zoom = f"min(1.0+{step:.6f}*on,1.10)" if i % 2 == 0 else f"max(1.10-{step:.6f}*on,1.0)"
+        motion = template.motion if template else "cinematic"
+        amount = {"cinematic": 0.08, "fast": 0.18, "detail": 0.25, "showcase": 0.12}[motion]
+        step = amount / frames
+        zoom = (
+            f"min(1.0+{step:.6f}*on,{1 + amount:.2f})"
+            if i % 2 == 0 else f"max({1 + amount:.2f}-{step:.6f}*on,1.0)"
+        )
+        if motion in ("fast", "showcase") and i % 2 == 0:
+            x_position = f"max(0,min(iw-iw/zoom,(iw-iw/zoom)*on/{frames}))"
+        elif motion in ("fast", "showcase"):
+            x_position = f"max(0,min(iw-iw/zoom,(iw-iw/zoom)*(1-on/{frames})))"
+        else:
+            x_position = "iw/2-(iw/zoom/2)"
         parts.append(
-            f"[c{i}]zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f"[c{i}]zoompan=z='{zoom}':x='{x_position}':y='ih/2-(ih/zoom/2)'"
             f":d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},format=yuv420p,setsar=1[v{i}]"
         )
 
@@ -148,10 +207,11 @@ def build_filter_graph(count: int, duration: float, fit: str) -> str:
     else:
         last = "v0"
         for i in range(1, count):
-            offset = i * (clip - CROSSFADE)
+            offset = i * (clip - crossfade)
             out = "out" if i == count - 1 else f"x{i}"
             parts.append(
-                f"[{last}][v{i}]xfade=transition=fade:duration={CROSSFADE}:offset={offset:.3f}[{out}]"
+                f"[{last}][v{i}]xfade=transition={template.transition if template else 'fade'}:"
+                f"duration={crossfade}:offset={offset:.3f}[{out}]"
             )
             last = out
     return ";".join(parts)
@@ -195,12 +255,12 @@ def _encode_args(crf: int, with_audio: bool = False) -> list:
 
 def _run_ffmpeg(
     ffmpeg: str, images: List[Path], duration: float, fit: str, crf: int, output: Path,
-    audio: Optional[Path] = None,
+    audio: Optional[Path] = None, template: Optional[VideoTemplate] = None,
 ) -> None:
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     for image in images:
         command += ["-i", str(image)]
-    graph = build_filter_graph(len(images), duration, fit)
+    graph = build_filter_graph(len(images), duration, fit, template)
     maps = ["-map", "[out]"]
     if audio is not None:
         # الصوت يتكرر إن كان أقصر من الفيديو ويُقص عند نهايته (-t)، مع ظهور تدريجي واختفاء تدريجي
@@ -227,7 +287,7 @@ def _run_ffmpeg(
 
 def render_video_file(
     images: List[Path], output: Path, *, duration: float, fit: str = "blur",
-    audio: Optional[Path], max_bytes: int,
+    audio: Optional[Path], max_bytes: int, template: Optional[VideoTemplate] = None,
 ) -> int:
     """يرندر صوراً إلى ملف مؤقت، ويعيد المحاولة بجودة أقل عند تجاوز حد الحجم."""
     if not images:
@@ -240,10 +300,10 @@ def render_video_file(
         raise VideoToolMissingError(
             "ffmpeg غير موجود للخدمة. ثبّته (sudo apt install ffmpeg) أو حدّد مساره في .env: FFMPEG_BIN=/usr/bin/ffmpeg"
         )
-    _run_ffmpeg(ffmpeg, images, duration, fit, 23, output, audio)
+    _run_ffmpeg(ffmpeg, images, duration, fit, 23, output, audio, template)
     if output.stat().st_size > max_bytes:
         logger.info("Video is %d bytes, re-encoding smaller", output.stat().st_size)
-        _run_ffmpeg(ffmpeg, images, duration, fit, 28, output, audio)
+        _run_ffmpeg(ffmpeg, images, duration, fit, 28, output, audio, template)
     size = output.stat().st_size
     if size > max_bytes:
         raise VideoRenderError("حجم الفيديو الناتج أكبر من المسموح حتى بعد الضغط")
@@ -262,17 +322,20 @@ def create_product_video(
 
 def create_factory_product_video(
     sku: str, *, duration: float, audio: Optional[str], factory_id: int,
+    template: VideoTemplate,
 ) -> VideoResult:
     """يبني فيديو مصنع حتى دقيقة ويحفظه في مجلد المنتج."""
     return _create_product_video(
         sku, duration=duration, fit="blur", audio=audio, factory_id=factory_id,
         max_duration=MAX_FACTORY_DURATION, max_bytes=MAX_FACTORY_VIDEO_BYTES,
+        template=template,
     )
 
 
 def _create_product_video(
     sku: str, *, duration: float, fit: str, audio: Optional[str],
     factory_id: Optional[int], max_duration: float, max_bytes: int,
+    template: Optional[VideoTemplate] = None,
 ) -> VideoResult:
     """يبني فيديو جديداً في آخر تسلسل فيديوهات المنتج ({SKU}/{n}.mp4) دون المساس بأي فيديو قائم.
     لا يلمس قاعدة البيانات. NotFoundError: لا صور للمنتج. InvalidInputError: مدخل غير صالح.
@@ -288,7 +351,7 @@ def _create_product_video(
 
     audio_path = resolve_audio(audio) if audio else None
 
-    images = list_source_images(sku, factory_id)[:MAX_IMAGES]
+    images = list_source_images(sku, factory_id)[:template.max_images if template else MAX_IMAGES]
     if not images:
         raise NotFoundError("لا توجد صور لهذا المنتج لبناء فيديو منها")
 
@@ -297,7 +360,8 @@ def _create_product_video(
     tmp = folder / f".video-{uuid.uuid4().hex}.tmp"
     try:
         size = render_video_file(
-            images, tmp, duration=duration, fit=fit, audio=audio_path, max_bytes=max_bytes,
+            images, tmp, duration=duration, fit=fit, audio=audio_path,
+            max_bytes=max_bytes, template=template,
         )
         index, target = _publish(sku, tmp, factory_id)
     finally:

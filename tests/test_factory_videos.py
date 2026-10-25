@@ -97,7 +97,7 @@ class FactoryVideoRoutesTests(unittest.TestCase):
         self.addCleanup(engine.dispose)
 
     @staticmethod
-    def _write_video(_ffmpeg, _images, _duration, _fit, _crf, output, _audio):
+    def _write_video(_ffmpeg, _images, _duration, _fit, _crf, output, _audio, _template):
         output.write_bytes(b"generated-video")
 
     def add_library_image(self, factory_id=1):
@@ -135,8 +135,14 @@ class FactoryVideoRoutesTests(unittest.TestCase):
         self.assertEqual([item["sku"] for item in options["products"]], ["ST1"])
         self.assertEqual(options["audio_files"], ["a.mp3", "z.wav"])
         self.assertEqual(options["default_audio"], "a.mp3")
+        self.assertEqual(options["default_template"], "cinematic_30")
         self.assertEqual(options["library_images_count"], 1)
         self.assertEqual(options["max_duration"], 60)
+        self.assertEqual(len(options["templates"]), 10)
+        self.assertEqual(
+            {template["duration"] for template in options["templates"]},
+            {7, 15, 30},
+        )
 
     def test_specific_product_video_is_saved_in_that_product_folder(self):
         response = self.client.post("/api/factories/1/videos/generate", json={
@@ -147,6 +153,8 @@ class FactoryVideoRoutesTests(unittest.TestCase):
         result = response.json()
         self.assertEqual(result["sku"], "ST1")
         self.assertEqual(result["audio"], "a.mp3")
+        self.assertEqual(result["template"], "cinematic_30")
+        self.assertEqual(result["duration"], 20)
         self.assertEqual(result["images_used"], 1)
         self.assertEqual(
             result["video_url"],
@@ -202,6 +210,35 @@ class FactoryVideoRoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["library_images_count"], 1)
+
+    def test_long_showcase_template_uses_more_library_images_and_its_default_duration(self):
+        with self.Session() as db:
+            db.add_all([
+                models.Media(
+                    factory_id=1, media_type="image",
+                    url=f"https://cdn.example.test/images/{index}.jpg",
+                    description=f"صورة {index}",
+                )
+                for index in range(1, 18)
+            ])
+            db.commit()
+
+        downloaded = []
+
+        def download(url, destination):
+            downloaded.append(url)
+            destination.write_bytes(b"downloaded-image")
+
+        with mock.patch("app.services.factory_videos._download_library_image", side_effect=download):
+            response = self.client.post("/api/factories/1/videos/generate", json={
+                "source": "library", "template": "showcase_30",
+            })
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["template"], "showcase_30")
+        self.assertEqual(response.json()["duration"], 30)
+        self.assertEqual(response.json()["images_used"], 15)
+        self.assertEqual(len(downloaded), 15)
 
     def test_random_product_stays_within_factory(self):
         response = self.client.post("/api/factories/1/videos/generate", json={

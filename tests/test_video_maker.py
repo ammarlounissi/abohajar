@@ -64,6 +64,17 @@ class FilterGraphTests(unittest.TestCase):
         # آخر لقطة تنتهي عند المدة المطلوبة تماماً
         self.assertAlmostEqual(2 * (clip - video_maker.CROSSFADE) + clip, 7.0, places=6)
 
+    def test_factory_templates_change_motion_transition_and_card_layout(self):
+        quick = video_maker.get_video_template("quick_7")
+        cards = video_maker.get_video_template("cards_15")
+        quick_graph = video_maker.build_filter_graph(2, quick.duration, "blur", quick)
+        cards_graph = video_maker.build_filter_graph(2, cards.duration, "blur", cards)
+
+        self.assertIn("xfade=transition=smoothleft", quick_graph)
+        self.assertIn("iw-iw/zoom", quick_graph)
+        self.assertIn("xfade=transition=fade", cards_graph)
+        self.assertIn("pad=iw+80:ih+80:40:40:white", cards_graph)
+
 
 class SourceImageTests(VideoMakerBase):
     def test_lists_numbered_images_in_order_and_ignores_junk(self):

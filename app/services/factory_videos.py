@@ -27,6 +27,7 @@ MAX_LIBRARY_IMAGE_PIXELS = 50_000_000
 class FactoryVideoResult:
     factory_id: int
     source: str
+    template: str
     sku: Optional[str]
     url: str
     size_bytes: int
@@ -116,8 +117,18 @@ def get_video_options(db: Session, factory_id: int) -> dict:
         ],
         "audio_files": video_maker.list_audio_files(),
         "default_audio": _audio_selection(None),
+        "default_template": video_maker.DEFAULT_FACTORY_TEMPLATE,
         "library_images_count": len(_library_image_entries(db, factory_id)),
         "max_duration": video_maker.MAX_FACTORY_DURATION,
+        "templates": [
+            {
+                "id": template.id,
+                "name": template.name,
+                "duration": template.duration,
+                "max_images": template.max_images,
+            }
+            for template in video_maker.VIDEO_TEMPLATES
+        ],
     }
 
 
@@ -127,11 +138,14 @@ def generate_factory_video(
     *,
     source: str,
     sku: Optional[str],
-    duration: float,
+    template_id: str,
+    duration: Optional[float],
     audio: Optional[str],
 ) -> FactoryVideoResult:
     get_factory(db, factory_id)
-    if not video_maker.MIN_DURATION <= duration <= video_maker.MAX_FACTORY_DURATION:
+    template = video_maker.get_video_template(template_id)
+    selected_duration = duration if duration is not None else template.duration
+    if not video_maker.MIN_DURATION <= selected_duration <= video_maker.MAX_FACTORY_DURATION:
         raise InvalidInputError("مدة الفيديو يجب أن تكون بين 3 و60 ثانية")
     selected_audio = _audio_selection(audio)
 
@@ -152,7 +166,8 @@ def generate_factory_video(
             product = random.choice(products)
 
         result = video_maker.create_factory_product_video(
-            product.sku, duration=duration, audio=selected_audio, factory_id=factory_id,
+            product.sku, duration=selected_duration, audio=selected_audio,
+            factory_id=factory_id, template=template,
         )
         try:
             product.video_url = result.url
@@ -162,7 +177,8 @@ def generate_factory_video(
             result.path.unlink(missing_ok=True)
             raise
         return FactoryVideoResult(
-            factory_id=factory_id, source=source, sku=product.sku, url=result.url,
+            factory_id=factory_id, source=source, template=template.id,
+            sku=product.sku, url=result.url,
             size_bytes=result.size_bytes, duration=result.duration,
             images_used=result.images_used, audio=result.audio,
         )
@@ -183,7 +199,7 @@ def generate_factory_video(
     selected_images = []
     try:
         for entry in selected_entries:
-            if len(selected_images) >= video_maker.MAX_IMAGES:
+            if len(selected_images) >= template.max_images:
                 break
             local_path = _local_library_image(entry, factory_id)
             if local_path is not None:
@@ -207,8 +223,8 @@ def generate_factory_video(
                 "تعذّر استخدام الصور المسجلة في مكتبة المصنع؛ تحقق من الروابط وملفات الصور"
             )
         size = video_maker.render_video_file(
-            selected_images, temporary, duration=duration, audio=audio_path,
-            max_bytes=media_library.MAX_UPLOAD_BYTES,
+            selected_images, temporary, duration=selected_duration, audio=audio_path,
+            max_bytes=media_library.MAX_UPLOAD_BYTES, template=template,
         )
         target.hardlink_to(temporary)
         target.chmod(0o664)
@@ -230,7 +246,8 @@ def generate_factory_video(
             image_path.unlink(missing_ok=True)
 
     return FactoryVideoResult(
-        factory_id=factory_id, source=source, sku=None, url=item.url,
-        size_bytes=size, duration=duration, images_used=len(selected_images),
+        factory_id=factory_id, source=source, template=template.id,
+        sku=None, url=item.url, size_bytes=size,
+        duration=selected_duration, images_used=len(selected_images),
         audio=selected_audio,
     )

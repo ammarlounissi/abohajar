@@ -138,12 +138,14 @@ def generate_factory_video(
         factory_id,
         source=request.source,
         sku=request.sku,
+        template_id=request.template,
         duration=request.duration,
         audio=request.audio,
     )
     return schemas.FactoryVideoResponse(
         factory_id=result.factory_id,
         source=result.source,
+        template=result.template,
         sku=result.sku,
         video_url=result.url,
         size_bytes=result.size_bytes,
