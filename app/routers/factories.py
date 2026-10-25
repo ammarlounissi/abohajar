@@ -151,6 +151,24 @@ def generate_factory_video(
     )
 
 
+@router.post(
+    "/{factory_id}/videos/generate-random",
+    response_model=schemas.FactoryVideoJobAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def generate_random_factory_library_video(
+    factory_id: int, db: Session = Depends(get_db),
+):
+    """يضع فيديو مكتبة آلياً لمدة 30 ثانية بصوت وقالب عشوائيين في الطابور."""
+    job = factory_video_jobs.enqueue_automated_library_video(db, factory_id)
+    return schemas.FactoryVideoJobAccepted(
+        id=job.id,
+        factory_id=job.factory_id,
+        status="queued",
+        status_url=f"/api/factories/{factory_id}/videos/jobs/{job.id}",
+    )
+
+
 @router.get(
     "/{factory_id}/videos/jobs/{job_id}",
     response_model=schemas.FactoryVideoJobResponse,

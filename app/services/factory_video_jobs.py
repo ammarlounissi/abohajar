@@ -1,5 +1,6 @@
 """Queue and lifecycle management for durable factory video generation jobs."""
 import logging
+import random
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -9,7 +10,8 @@ from app import models
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.services import factory_videos
-from app.services.errors import NotFoundError, ServiceError
+from app.services import video_maker
+from app.services.errors import InvalidInputError, NotFoundError, ServiceError
 
 logger = logging.getLogger(__name__)
 SessionFactory = Callable[[], Session]
@@ -45,6 +47,26 @@ def enqueue_video_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+def enqueue_automated_library_video(
+    db: Session, factory_id: int,
+) -> models.FactoryVideoJob:
+    """Queue a 30-second library video with a randomly selected template and soundtrack."""
+    audio_files = video_maker.list_audio_files()
+    if not audio_files:
+        raise InvalidInputError("لا توجد ملفات صوتية متاحة للاختيار العشوائي")
+    template = random.choice(video_maker.VIDEO_TEMPLATES)
+    audio = random.choice(audio_files)
+    return enqueue_video_job(
+        db,
+        factory_id,
+        source="library",
+        sku=None,
+        template=template.id,
+        duration=30,
+        audio=audio,
+    )
 
 
 def get_video_job(db: Session, factory_id: int, job_id: int) -> models.FactoryVideoJob:

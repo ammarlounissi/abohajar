@@ -283,6 +283,37 @@ class FactoryVideoRoutesTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/factories/1/videos/jobs/{job_id}").status_code, 200)
         self.assertEqual(self.client.get(f"/api/factories/2/videos/jobs/{job_id}").status_code, 404)
 
+    def test_automation_endpoint_queues_random_library_video_with_fixed_duration(self):
+        self.add_library_image()
+
+        with mock.patch(
+            "app.services.factory_video_jobs.random.choice",
+            side_effect=lambda options: options[-1],
+        ):
+            response = self.client.post("/api/factories/1/videos/generate-random")
+
+        self.assertEqual(response.status_code, 202, response.text)
+        accepted = response.json()
+        self.assertEqual(accepted["status"], "queued")
+        with self.Session() as db:
+            job = db.get(models.FactoryVideoJob, accepted["id"])
+            self.assertEqual(job.factory_id, 1)
+            self.assertEqual(job.source, "library")
+            self.assertEqual(job.template, "cards_30")
+            self.assertEqual(job.duration, 30)
+            self.assertEqual(job.audio, "z.wav")
+            self.assertIsNone(job.sku)
+
+    def test_automation_endpoint_requires_audio_files_and_registered_images(self):
+        with mock.patch("app.services.video_maker.list_audio_files", return_value=[]):
+            no_audio = self.client.post("/api/factories/1/videos/generate-random")
+        self.assertEqual(no_audio.status_code, 422)
+        self.assertIn("ملفات صوتية", no_audio.json()["detail"])
+
+        no_images = self.client.post("/api/factories/1/videos/generate-random")
+        self.assertEqual(no_images.status_code, 404)
+        self.assertIn("صور مسجلة", no_images.json()["detail"])
+
     def test_queued_job_runs_in_worker_and_exposes_failure(self):
         response = self.client.post("/api/factories/1/videos/generate", json={
             "source": "random_product",
