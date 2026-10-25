@@ -95,6 +95,9 @@ class Factory(Base):
     social_channels = relationship("SocialChannel", back_populates="factory")
     media_items = relationship("Media", back_populates="factory", cascade="all, delete-orphan")
     contacts = relationship("FactoryContact", back_populates="factory", cascade="all, delete-orphan")
+    video_jobs = relationship(
+        "FactoryVideoJob", back_populates="factory", cascade="all, delete-orphan",
+    )
     chat_messages = relationship(
         "FactoryChatMessage", back_populates="factory", cascade="all, delete-orphan",
         order_by="FactoryChatMessage.id",
@@ -140,6 +143,30 @@ class Media(Base):
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
 
     factory = relationship("Factory", back_populates="media_items")
+
+
+class FactoryVideoJob(Base):
+    """طلب توليد فيديو محفوظ ليستكمله عامل مستقل عن طلب HTTP."""
+    __tablename__ = "factory_video_jobs"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    source = Column(String(30), nullable=False)
+    sku = Column(String(50), nullable=True)
+    template = Column(String(40), nullable=False)
+    duration = Column(Float, nullable=False)
+    audio = Column(String(120), nullable=True)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    video_url = Column(String(2000), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    images_used = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    factory = relationship("Factory", back_populates="video_jobs")
 
 
 class SocialChannel(Base):

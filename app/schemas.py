@@ -166,6 +166,33 @@ class FactoryVideoResponse(BaseModel):
     audio: Optional[str] = None
 
 
+class FactoryVideoJobAccepted(BaseModel):
+    id: int
+    factory_id: int
+    status: Literal["queued"]
+    status_url: str
+
+
+class FactoryVideoJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    factory_id: int
+    source: Literal["specific_product", "random_product", "library"]
+    template: str
+    sku: Optional[str] = None
+    duration: float
+    audio: Optional[str] = None
+    status: Literal["queued", "running", "succeeded", "failed"]
+    video_url: Optional[str] = None
+    size_bytes: Optional[int] = None
+    images_used: Optional[int] = None
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
 # --- قنوات النشر ---
 class SocialChannelCreate(BaseModel):
     factory_id: int = Field(gt=0)

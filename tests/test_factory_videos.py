@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.database import Base, get_db
 from app.core.security import require_admin
 from app.routers import factories as factories_router
-from app.services import errors, media, media_library
+from app.services import errors, factory_video_jobs, media, media_library
 
 
 class FactoryVideoRoutesTests(unittest.TestCase):
@@ -124,6 +124,19 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             ))
             db.commit()
 
+    def run_queued_job(self, response):
+        self.assertEqual(response.status_code, 202, response.text)
+        accepted = response.json()
+        self.assertEqual(accepted["status"], "queued")
+        self.assertTrue(accepted["status_url"].endswith(f"/{accepted['id']}"))
+        job_id = factory_video_jobs.claim_next_video_job(self.Session)
+        self.assertEqual(job_id, accepted["id"])
+        self.assertTrue(factory_video_jobs.process_video_job(job_id, self.Session))
+        status_response = self.client.get(accepted["status_url"])
+        self.assertEqual(status_response.status_code, 200, status_response.text)
+        self.assertEqual(status_response.json()["status"], "succeeded")
+        return status_response.json()
+
     def test_options_are_factory_scoped_and_include_default_audio(self):
         self.add_library_image()
 
@@ -149,8 +162,7 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             "source": "specific_product", "sku": "st1", "duration": 20,
         })
 
-        self.assertEqual(response.status_code, 201, response.text)
-        result = response.json()
+        result = self.run_queued_job(response)
         self.assertEqual(result["sku"], "ST1")
         self.assertEqual(result["audio"], "a.mp3")
         self.assertEqual(result["template"], "cinematic_30")
@@ -172,8 +184,7 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             "source": "library", "duration": 60,
         })
 
-        self.assertEqual(response.status_code, 201, response.text)
-        result = response.json()
+        result = self.run_queued_job(response)
         self.assertIsNone(result["sku"])
         self.assertEqual(result["duration"], 60)
         self.assertEqual(result["audio"], "a.mp3")
@@ -200,8 +211,8 @@ class FactoryVideoRoutesTests(unittest.TestCase):
                 "source": "library", "duration": 10,
             })
 
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["images_used"], 1)
+            result = self.run_queued_job(response)
+        self.assertEqual(result["images_used"], 1)
 
     def test_options_count_external_images_registered_in_library(self):
         self.add_external_library_image()
@@ -234,10 +245,10 @@ class FactoryVideoRoutesTests(unittest.TestCase):
                 "source": "library", "template": "showcase_30",
             })
 
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["template"], "showcase_30")
-        self.assertEqual(response.json()["duration"], 30)
-        self.assertEqual(response.json()["images_used"], 15)
+            result = self.run_queued_job(response)
+        self.assertEqual(result["template"], "showcase_30")
+        self.assertEqual(result["duration"], 30)
+        self.assertEqual(result["images_used"], 15)
         self.assertEqual(len(downloaded), 15)
 
     def test_random_product_stays_within_factory(self):
@@ -245,8 +256,8 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             "source": "random_product",
         })
 
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["sku"], "ST1")
+        result = self.run_queued_job(response)
+        self.assertEqual(result["sku"], "ST1")
 
     def test_product_from_another_factory_and_invalid_request_are_rejected(self):
         wrong_factory = self.client.post("/api/factories/1/videos/generate", json={
@@ -262,3 +273,46 @@ class FactoryVideoRoutesTests(unittest.TestCase):
         self.assertEqual(wrong_factory.status_code, 404)
         self.assertEqual(missing_sku.status_code, 422)
         self.assertEqual(too_long.status_code, 422)
+
+    def test_job_status_is_scoped_to_factory(self):
+        response = self.client.post("/api/factories/1/videos/generate", json={
+            "source": "random_product",
+        })
+        job_id = response.json()["id"]
+
+        self.assertEqual(self.client.get(f"/api/factories/1/videos/jobs/{job_id}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/factories/2/videos/jobs/{job_id}").status_code, 404)
+
+    def test_queued_job_runs_in_worker_and_exposes_failure(self):
+        response = self.client.post("/api/factories/1/videos/generate", json={
+            "source": "random_product",
+        })
+        self.assertEqual(response.status_code, 202)
+        status_url = response.json()["status_url"]
+        self.assertEqual(self.client.get(status_url).json()["status"], "queued")
+
+        job_id = factory_video_jobs.claim_next_video_job(self.Session)
+        with mock.patch(
+            "app.services.factory_video_jobs.factory_videos.generate_factory_video",
+            side_effect=errors.InvalidInputError("تعذّر بناء الفيديو"),
+        ):
+            self.assertFalse(factory_video_jobs.process_video_job(job_id, self.Session))
+
+        status_response = self.client.get(status_url)
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "failed")
+        self.assertEqual(status_response.json()["error"], "تعذّر بناء الفيديو")
+
+    def test_worker_marks_interrupted_jobs_failed_without_requeueing(self):
+        response = self.client.post("/api/factories/1/videos/generate", json={
+            "source": "random_product",
+        })
+        job_id = factory_video_jobs.claim_next_video_job(self.Session)
+
+        recovered = factory_video_jobs.recover_interrupted_video_jobs(self.Session)
+
+        self.assertEqual(recovered, 1)
+        status_response = self.client.get(response.json()["status_url"])
+        self.assertEqual(status_response.json()["status"], "failed")
+        self.assertIn("توقف عامل التوليد", status_response.json()["error"])
+        self.assertFalse(factory_video_jobs.process_video_job(job_id, self.Session))

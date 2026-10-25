@@ -7,6 +7,7 @@ from app import schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import factories as factory_service
+from app.services import factory_video_jobs
 from app.services import factory_videos
 from app.services import media_library
 
@@ -124,32 +125,36 @@ def get_factory_video_options(factory_id: int, db: Session = Depends(get_db)):
 
 @router.post(
     "/{factory_id}/videos/generate",
-    response_model=schemas.FactoryVideoResponse,
-    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.FactoryVideoJobAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 def generate_factory_video(
     factory_id: int,
     request: schemas.FactoryVideoGenerateRequest,
     db: Session = Depends(get_db),
 ):
-    """ينشئ فيديو حتى دقيقة بخلفية مموهة، ويحفظه مع المنتج أو في مكتبة المصنع."""
-    result = factory_videos.generate_factory_video(
+    """يضع توليد الفيديو في الطابور ويعيد معرّف المهمة فوراً."""
+    job = factory_video_jobs.enqueue_video_job(
         db,
         factory_id,
         source=request.source,
         sku=request.sku,
-        template_id=request.template,
+        template=request.template,
         duration=request.duration,
         audio=request.audio,
     )
-    return schemas.FactoryVideoResponse(
-        factory_id=result.factory_id,
-        source=result.source,
-        template=result.template,
-        sku=result.sku,
-        video_url=result.url,
-        size_bytes=result.size_bytes,
-        duration=result.duration,
-        images_used=result.images_used,
-        audio=result.audio,
+    return schemas.FactoryVideoJobAccepted(
+        id=job.id,
+        factory_id=job.factory_id,
+        status="queued",
+        status_url=f"/api/factories/{factory_id}/videos/jobs/{job.id}",
     )
+
+
+@router.get(
+    "/{factory_id}/videos/jobs/{job_id}",
+    response_model=schemas.FactoryVideoJobResponse,
+)
+def get_factory_video_job(factory_id: int, job_id: int, db: Session = Depends(get_db)):
+    """يعرض حالة مهمة توليد الفيديو ورابطه عند اكتمالها."""
+    return factory_video_jobs.get_video_job(db, factory_id, job_id)

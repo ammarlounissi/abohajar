@@ -1,0 +1,16 @@
+[Unit]
+Description=Hadjret Bladi factory video generation worker
+After=network.target
+
+[Service]
+Type=simple
+User=fastapi_user
+WorkingDirectory=/home/ammar/abohajar
+ExecStart=/home/ammar/abohajar/.venv/bin/python -m app.jobs.generate_factory_videos
+Restart=always
+RestartSec=5
+TimeoutStopSec=720
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

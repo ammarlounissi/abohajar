@@ -100,6 +100,29 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+### عامل توليد الفيديوهات
+
+توليد الفيديو يعمل كعامل مستقل حتى لا يبقى طلب HTTP مفتوحاً أثناء تشغيل ffmpeg. بعد نشر الكود، طبّق ترحيل جدول المهام ثم ثبّت خدمة systemd (عدّل مسار المشروع والبيئة الافتراضية واسم المستخدم في ملف الوحدة إذا اختلفت إعدادات الخادم):
+
+```bash
+alembic upgrade head
+sudo cp deploy/systemd/hadjret-video-worker.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hadjret-video-worker
+sudo systemctl status hadjret-video-worker
+sudo journalctl -u hadjret-video-worker -f
+```
+
+شغّل نسخة واحدة فقط من العامل على قاعدة البيانات؛ فهو يعالج مهمة واحدة في كل مرة. الطلب `POST /api/factories/{factory_id}/videos/generate` يرجع `202 Accepted` ومعه `id` وحالة `queued` و`status_url`. استعلم عن هذا الرابط عبر `GET` حتى تصبح الحالة `succeeded` (ويظهر `video_url`) أو `failed` (ويظهر `error`). لا تعِد إرسال طلب التوليد عند انتهاء مهلة العميل؛ افحص حالة المهمة أولاً لتجنب إنشاء فيديو مكرر. المهام التي كان العامل ينفذها عند توقفه تُعلّم فاشلة عند تشغيله مجدداً ولا يعاد تنفيذها تلقائياً.
+
+```bash
+curl -X POST "$API/api/factories/1/videos/generate" \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"source":"library","template":"cinematic_30"}'
+# خذ status_url من الاستجابة ثم استعلم عنه:
+curl "$API/api/factories/1/videos/jobs/123" -H "X-API-Key: $KEY"
+```
+
 التحقق:
 
 ```bash
@@ -149,7 +172,8 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | `GET /api/factories/{factory_id}/media` | عرض وسائط المصنع، مع `?media_type=image` أو `?media_type=video`، و`skip` و`limit` للتصفح |
 | `DELETE /api/factories/{factory_id}/media/{media_id}` | حذف وسيط من مكتبة المصنع المحدد |
 | `GET /api/factories/{factory_id}/videos/options` | خيارات التوليد: المنتجات التي لها صور، ملفات الصوت، الصوت الافتراضي، وعدد صور المكتبة المسجلة |
-| `POST /api/factories/{factory_id}/videos/generate` | توليد فيديو بخلفية مموهة، مدة 3–60 ثانية، وحفظه في مجلد المنتج أو مكتبة المصنع |
+| `POST /api/factories/{factory_id}/videos/generate` | وضع طلب التوليد في الطابور؛ يرجع `202 Accepted` ومعرّف المهمة |
+| `GET /api/factories/{factory_id}/videos/jobs/{job_id}` | حالة المهمة ونتيجتها أو رسالة الفشل |
 
 مثال جسم طلب التوليد:
 ```json

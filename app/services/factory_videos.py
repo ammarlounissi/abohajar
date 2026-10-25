@@ -132,6 +132,42 @@ def get_video_options(db: Session, factory_id: int) -> dict:
     }
 
 
+def validate_factory_video_request(
+    db: Session, factory_id: int, *, source: str, sku: Optional[str],
+    template_id: str, duration: Optional[float], audio: Optional[str],
+) -> tuple:
+    get_factory(db, factory_id)
+    template = video_maker.get_video_template(template_id)
+    selected_duration = duration if duration is not None else template.duration
+    if not video_maker.MIN_DURATION <= selected_duration <= video_maker.MAX_FACTORY_DURATION:
+        raise InvalidInputError("مدة الفيديو يجب أن تكون بين 3 و60 ثانية")
+    selected_audio = _audio_selection(audio)
+
+    if source == "specific_product":
+        if not sku:
+            raise InvalidInputError("رمز SKU مطلوب عند اختيار منتج محدد")
+        product = db.query(models.Product).filter(
+            models.Product.factory_id == factory_id,
+            models.Product.sku == sku,
+        ).first()
+        if product is None:
+            raise NotFoundError("المنتج غير موجود ضمن منتجات هذا المصنع")
+        if not _product_images(product):
+            raise NotFoundError("لا توجد صور لهذا المنتج لبناء فيديو منها")
+    elif source == "random_product":
+        products = db.query(models.Product).filter(
+            models.Product.factory_id == factory_id,
+        ).all()
+        if not any(_product_images(product) for product in products):
+            raise NotFoundError("لا توجد منتجات لهذا المصنع تحتوي على صور")
+    elif source == "library":
+        if not _library_image_entries(db, factory_id):
+            raise NotFoundError("لا توجد صور مسجلة في مكتبة هذا المصنع")
+    else:
+        raise InvalidInputError("مصدر الصور غير معروف")
+    return template, selected_duration, selected_audio
+
+
 def generate_factory_video(
     db: Session,
     factory_id: int,
@@ -142,27 +178,17 @@ def generate_factory_video(
     duration: Optional[float],
     audio: Optional[str],
 ) -> FactoryVideoResult:
-    get_factory(db, factory_id)
-    template = video_maker.get_video_template(template_id)
-    selected_duration = duration if duration is not None else template.duration
-    if not video_maker.MIN_DURATION <= selected_duration <= video_maker.MAX_FACTORY_DURATION:
-        raise InvalidInputError("مدة الفيديو يجب أن تكون بين 3 و60 ثانية")
-    selected_audio = _audio_selection(audio)
+    template, selected_duration, selected_audio = validate_factory_video_request(
+        db, factory_id, source=source, sku=sku, template_id=template_id,
+        duration=duration, audio=audio,
+    )
 
     if source in ("specific_product", "random_product"):
         query = db.query(models.Product).filter(models.Product.factory_id == factory_id)
         if source == "specific_product":
-            if not sku:
-                raise InvalidInputError("رمز SKU مطلوب عند اختيار منتج محدد")
             product = query.filter(models.Product.sku == sku).first()
-            if product is None:
-                raise NotFoundError("المنتج غير موجود ضمن منتجات هذا المصنع")
-            if not _product_images(product):
-                raise NotFoundError("لا توجد صور لهذا المنتج لبناء فيديو منها")
         else:
             products = [item for item in query.all() if _product_images(item)]
-            if not products:
-                raise NotFoundError("لا توجد منتجات لهذا المصنع تحتوي على صور")
             product = random.choice(products)
 
         result = video_maker.create_factory_product_video(
@@ -186,8 +212,6 @@ def generate_factory_video(
     if source != "library":
         raise InvalidInputError("مصدر الصور غير معروف")
     image_entries = _library_image_entries(db, factory_id)
-    if not image_entries:
-        raise NotFoundError("لا توجد صور مسجلة في مكتبة هذا المصنع")
     selected_entries = random.sample(image_entries, len(image_entries))
     directory = media_library.library_dir(factory_id)
     directory.mkdir(parents=True, exist_ok=True)
