@@ -1,4 +1,6 @@
 """توليد فيديوهات المصنع من صور منتجاته أو مكتبة وسائطه."""
+import io
+import logging
 import random
 import uuid
 from dataclasses import dataclass
@@ -6,6 +8,8 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote, urlsplit
 
+import httpx
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app import models
@@ -13,6 +17,10 @@ from app.core.config import settings
 from app.services import media, media_library, video_maker
 from app.services.errors import InvalidInputError, NotFoundError
 from app.services.factories import get_factory
+
+logger = logging.getLogger(__name__)
+MAX_LIBRARY_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_LIBRARY_IMAGE_PIXELS = 50_000_000
 
 
 @dataclass
@@ -34,24 +42,57 @@ def _product_images(product: models.Product) -> List[Path]:
         return []
 
 
-def _library_images(db: Session, factory_id: int) -> List[Path]:
-    prefix = f"/api/media/factories/{factory_id}/"
-    images = set()
+def _library_image_entries(db: Session, factory_id: int) -> List[models.Media]:
     entries = db.query(models.Media).filter(
         models.Media.factory_id == factory_id,
         models.Media.media_type == "image",
     ).all()
+    unique = {}
     for entry in entries:
-        path = urlsplit(entry.url).path
-        if not path.startswith(prefix):
-            continue
-        filename = path[len(prefix):]
-        if "/" in filename or Path(filename).suffix.lower() not in media.IMAGE_EXTENSIONS:
-            continue
-        local_path = media_library.factory_media_file_path(factory_id, filename)
-        if local_path is not None and local_path.is_file():
-            images.add(local_path)
-    return sorted(images)
+        parsed = urlsplit(entry.url)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            unique.setdefault(entry.url, entry)
+    return list(unique.values())
+
+
+def _local_library_image(entry: models.Media, factory_id: int) -> Optional[Path]:
+    prefix = f"/api/media/factories/{factory_id}/"
+    path = urlsplit(entry.url).path
+    if not path.startswith(prefix):
+        return None
+    filename = path[len(prefix):]
+    if "/" in filename or Path(filename).suffix.lower() not in media.IMAGE_EXTENSIONS:
+        return None
+    local_path = media_library.factory_media_file_path(factory_id, filename)
+    return local_path if local_path is not None and local_path.is_file() else None
+
+
+def _download_library_image(url: str, destination: Path) -> None:
+    """ينزّل صورة مسجلة في المكتبة، ويتحقق منها ويحفظ نسخة JPEG مناسبة لـ ffmpeg."""
+    try:
+        with httpx.Client(timeout=20, follow_redirects=True) as client:
+            with client.stream("GET", url) as response:
+                response.raise_for_status()
+                content = bytearray()
+                for chunk in response.iter_bytes():
+                    content.extend(chunk)
+                    if len(content) > MAX_LIBRARY_IMAGE_BYTES:
+                        raise video_maker.VideoRenderError("حجم إحدى صور المكتبة يتجاوز 20 ميغابايت")
+    except video_maker.VideoRenderError:
+        raise
+    except httpx.HTTPError as exc:
+        raise video_maker.VideoRenderError("تعذّر تنزيل صورة مسجلة في مكتبة المصنع") from exc
+
+    try:
+        with Image.open(io.BytesIO(content)) as source:
+            if source.width * source.height > MAX_LIBRARY_IMAGE_PIXELS:
+                raise video_maker.VideoRenderError("أبعاد إحدى صور المكتبة أكبر من الحد المسموح")
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.save(destination, format="JPEG", quality=92)
+    except video_maker.VideoRenderError:
+        raise
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise video_maker.VideoRenderError("أحد روابط المكتبة لا يحتوي على صورة مدعومة") from exc
 
 
 def _audio_selection(audio: Optional[str]) -> Optional[str]:
@@ -75,7 +116,7 @@ def get_video_options(db: Session, factory_id: int) -> dict:
         ],
         "audio_files": video_maker.list_audio_files(),
         "default_audio": _audio_selection(None),
-        "library_images_count": len(_library_images(db, factory_id)),
+        "library_images_count": len(_library_image_entries(db, factory_id)),
         "max_duration": video_maker.MAX_FACTORY_DURATION,
     }
 
@@ -128,17 +169,43 @@ def generate_factory_video(
 
     if source != "library":
         raise InvalidInputError("مصدر الصور غير معروف")
-    images = _library_images(db, factory_id)
-    if not images:
-        raise NotFoundError("لا توجد صور محلية في مكتبة هذا المصنع")
-    selected_images = random.sample(images, min(len(images), video_maker.MAX_IMAGES))
+    image_entries = _library_image_entries(db, factory_id)
+    if not image_entries:
+        raise NotFoundError("لا توجد صور مسجلة في مكتبة هذا المصنع")
+    selected_entries = random.sample(image_entries, len(image_entries))
     directory = media_library.library_dir(factory_id)
     directory.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.mp4"
     target = directory / filename
     temporary = directory / f".video-{uuid.uuid4().hex}.tmp"
     audio_path = video_maker.resolve_audio(selected_audio) if selected_audio else None
+    downloaded_images = []
+    selected_images = []
     try:
+        for entry in selected_entries:
+            if len(selected_images) >= video_maker.MAX_IMAGES:
+                break
+            local_path = _local_library_image(entry, factory_id)
+            if local_path is not None:
+                selected_images.append(local_path)
+                continue
+            image_path = directory / f".image-{uuid.uuid4().hex}.jpg"
+            try:
+                _download_library_image(entry.url, image_path)
+            except video_maker.VideoRenderError as exc:
+                logger.warning(
+                    "Skipping unusable factory library image (factory_id=%s, media_id=%s): %s",
+                    factory_id, entry.id, exc,
+                )
+                image_path.unlink(missing_ok=True)
+                continue
+            downloaded_images.append(image_path)
+            selected_images.append(image_path)
+
+        if not selected_images:
+            raise video_maker.VideoRenderError(
+                "تعذّر استخدام الصور المسجلة في مكتبة المصنع؛ تحقق من الروابط وملفات الصور"
+            )
         size = video_maker.render_video_file(
             selected_images, temporary, duration=duration, audio=audio_path,
             max_bytes=media_library.MAX_UPLOAD_BYTES,
@@ -159,6 +226,8 @@ def generate_factory_video(
         raise
     finally:
         temporary.unlink(missing_ok=True)
+        for image_path in downloaded_images:
+            image_path.unlink(missing_ok=True)
 
     return FactoryVideoResult(
         factory_id=factory_id, source=source, sku=None, url=item.url,

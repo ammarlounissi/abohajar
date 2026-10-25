@@ -114,6 +114,16 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             ))
             db.commit()
 
+    def add_external_library_image(self, url="https://cdn.example.test/factory/image.jpg"):
+        with self.Session() as db:
+            db.add(models.Media(
+                factory_id=1,
+                media_type="image",
+                url=url,
+                description="صورة خارجية",
+            ))
+            db.commit()
+
     def test_options_are_factory_scoped_and_include_default_audio(self):
         self.add_library_image()
 
@@ -168,6 +178,30 @@ class FactoryVideoRoutesTests(unittest.TestCase):
             self.assertEqual(video.url, result["video_url"])
             self.assertEqual(video.factory_id, 1)
             self.assertEqual(db.query(models.Product).filter_by(sku="ST1").one().video_url, None)
+
+    def test_library_source_uses_registered_external_image_links(self):
+        image_url = "https://cdn.example.test/images/random.jpg"
+        self.add_external_library_image(image_url)
+
+        def download(url, destination):
+            self.assertEqual(url, image_url)
+            destination.write_bytes(b"downloaded-and-validated-jpeg")
+
+        with mock.patch("app.services.factory_videos._download_library_image", side_effect=download):
+            response = self.client.post("/api/factories/1/videos/generate", json={
+                "source": "library", "duration": 10,
+            })
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["images_used"], 1)
+
+    def test_options_count_external_images_registered_in_library(self):
+        self.add_external_library_image()
+
+        response = self.client.get("/api/factories/1/videos/options")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["library_images_count"], 1)
 
     def test_random_product_stays_within_factory(self):
         response = self.client.post("/api/factories/1/videos/generate", json={

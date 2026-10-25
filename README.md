@@ -148,14 +148,14 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | `POST /api/factories/{factory_id}/media/upload` | رفع ملف بصيغة `multipart/form-data` مع الحقل `file`، والوصف اختياري؛ يُحفظ تحت `FACTORY_MEDIA_ROOT/{factory_id}/library` (الافتراضي `/home/ammar/media/factory/{factory_id}/library`)، ويُقبل JPG/JPEG/PNG/WEBP/GIF/ICO/SVG أو MP4/MOV/WEBM حتى 100 ميغابايت |
 | `GET /api/factories/{factory_id}/media` | عرض وسائط المصنع، مع `?media_type=image` أو `?media_type=video`، و`skip` و`limit` للتصفح |
 | `DELETE /api/factories/{factory_id}/media/{media_id}` | حذف وسيط من مكتبة المصنع المحدد |
-| `GET /api/factories/{factory_id}/videos/options` | خيارات التوليد: المنتجات التي لها صور، ملفات الصوت، الصوت الافتراضي، وعدد صور المكتبة المحلية |
+| `GET /api/factories/{factory_id}/videos/options` | خيارات التوليد: المنتجات التي لها صور، ملفات الصوت، الصوت الافتراضي، وعدد صور المكتبة المسجلة |
 | `POST /api/factories/{factory_id}/videos/generate` | توليد فيديو بخلفية مموهة، مدة 3–60 ثانية، وحفظه في مجلد المنتج أو مكتبة المصنع |
 
 مثال جسم طلب التوليد:
 ```json
 {"source":"random_product","duration":30}
 ```
-قيم `source`: `specific_product` (يتطلب `sku`)، أو `random_product` (الافتراضي، يختار منتجاً عشوائياً من المصنع له صور)، أو `library` (يختار صوراً عشوائية من مكتبة المصنع). يمكن تحديد `audio` باسم ملف من `AUDIO_ROOT`؛ وإذا غاب يُختار أول ملف صوتي أبجدياً كافتراضي، أو يُنشأ الفيديو بلا صوت إن لم تتوفر ملفات. يحفظ فيديو المنتج داخل مجلده ويحدّث `video_url`، أما فيديو المكتبة فيُحفظ كوسيط `video` مسجل في مكتبة المصنع. لا يختار خيار المكتبة إلا الصور المحلية المسجلة فعلياً، ولا الروابط الخارجية.
+قيم `source`: `specific_product` (يتطلب `sku`)، أو `random_product` (الافتراضي، يختار منتجاً عشوائياً من المصنع له صور)، أو `library` (يختار عشوائياً حتى 6 صور مسجلة في مكتبة المصنع، سواء كانت روابطها محلية أو خارجية، وينزّل الخارجية مؤقتاً للتوليد). يمكن تحديد `audio` باسم ملف من `AUDIO_ROOT`؛ وإذا غاب يُختار أول ملف صوتي أبجدياً كافتراضي، أو يُنشأ الفيديو بلا صوت إن لم تتوفر ملفات. يحفظ فيديو المنتج داخل مجلده ويحدّث `video_url`، أما فيديو المكتبة فيُحفظ كوسيط `video` مسجل في مكتبة المصنع.
 
 مكان الحفظ: مجلد مخصص `factory` بجانب `products` (الافتراضي شقيق `MEDIA_ROOT`، ويُغيَّر بـ `FACTORY_MEDIA_ROOT` في `.env`). الروابط العامة لا تتغير لأنها تعتمد رقم المصنع واسم الملف لا المسار على القرص.
 **لنقل الملفات التي حُفظت سابقًا في `/home/ammar/media/{رقم}/`:**
