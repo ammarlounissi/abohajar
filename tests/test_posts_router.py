@@ -354,3 +354,45 @@ class FactoryReelPostTests(RouterCase):
         r = self.client.post(self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id})
         self.assertEqual(r.status_code, 422)
         self.assertEqual(self.client.get("/api/posts/").json(), [])
+
+
+class ExtractDescriptionTests(unittest.TestCase):
+    def test_fenced_json_object(self):
+        from app.services.factory_reel_posts import extract_description
+        raw = '```json\n{"description": "**حجر** ديكور فاخر\\n✨ جودة عالية", "hashtags": ["#ديكور", "حجر طبيعي"]}\n```'
+        text, tags = extract_description(raw)
+        self.assertEqual(text, "حجر ديكور فاخر\n✨ جودة عالية")
+        self.assertEqual(tags, ["#ديكور", "#حجر", "#طبيعي"])
+
+    def test_plain_text_and_json_string_and_list(self):
+        from app.services.factory_reel_posts import extract_description
+        self.assertEqual(extract_description("## عنوان\n- نقطة **مهمة**")[0], "عنوان\nنقطة مهمة")
+        self.assertEqual(extract_description('"نص داخل JSON"')[0], "نص داخل JSON")
+        self.assertEqual(extract_description('["سطر 1", "سطر 2"]')[0], "سطر 1\n\nسطر 2")
+        self.assertEqual(extract_description('{"a": "x", "b": "y"}')[0], "x\n\ny")
+
+    def test_keeps_hashtags_in_body(self):
+        from app.services.factory_reel_posts import extract_description
+        self.assertEqual(extract_description('{"text": "وصف #جزائر"}')[0], "وصف #جزائر")
+
+
+class FactoryReelJsonResponseTests(FactoryReelPostTests):
+    def test_json_response_is_cleaned_before_use(self):
+        with self.Session() as db:
+            video = models.FactoryVideoJob(
+                factory_id=1, source="library", template="t", duration=30, status="succeeded",
+                video_url="https://x.example/a.mp4",
+            )
+            chat = models.FactoryDescriptionJob(
+                factory_id=1, prompt="p", messages=[], model="m", status="succeeded",
+                response='```json\n{"description": "**وصف** نظيف"}\n```',
+            )
+            db.add_all([video, chat])
+            db.commit()
+            ids = (video.id, chat.id)
+        r = self.client.post(self.URL, json={"factory_id": 1, "video_id": ids[0], "chat_id": ids[1]})
+        self.assertEqual(r.status_code, 201, r.text)
+        description = r.json()["description"]
+        self.assertTrue(description.startswith("وصف نظيف\n"))
+        for junk in ("```", "json", "{", "**"):
+            self.assertNotIn(junk, description)
