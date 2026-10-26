@@ -169,6 +169,26 @@ class FactoryReelRequest(Base):
         return self.chat_job.status
 
 
+class DriveSyncedFile(Base):
+    """ملف صورة من مجلد Google Drive المشارَك مع المشروع، ومعالجته في مكتبة المصنع.
+    الصف يُنشأ بحالة copying قبل التنزيل (القيد الفريد يمنع نسخه مرتين من عمليتين متزامنتين)، ثم يصير
+    copied (مع media_id) أو skipped (مع السبب، فلا يُعاد تنزيله). الفاشل بسبب الشبكة يُحذف ليُعاد لاحقاً.
+    media_id بلا مفتاح أجنبي عمداً: حذف الصورة من المكتبة لا يُعيد نسخها من Drive."""
+    __tablename__ = "drive_synced_files"
+    __table_args__ = (UniqueConstraint("factory_id", "drive_file_id", name="uq_drive_synced_files_factory_file"),)
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    drive_file_id = Column(String(200), nullable=False)
+    name = Column(String(500), nullable=False)
+    size_bytes = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="copying")
+    media_id = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class FactoryContact(Base):
     """جهة اتصال للمصنع في قناة ما (واتساب/تيليجرام/بريد). المصنع الواحد قد يملك عدة قنوات،
     وإضافة قناة جديدة لا تغيّر المخطط. identifier مُطبَّع حسب القناة (انظر services/factories.py)."""

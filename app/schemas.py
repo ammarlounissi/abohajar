@@ -226,6 +226,16 @@ class FactoryReelRequestResponse(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class DriveSyncResponse(BaseModel):
+    factory_id: int
+    folders: int                 # مجلدات Drive المشارَكة التي تعود لبريد المصنع
+    copied: int
+    skipped: int                 # غير صالح أو كبير جداً (لا يُعاد تنزيله)
+    failed: int                  # فشل مؤقت، يُعاد في التشغيل التالي
+    remaining: int               # صور جديدة لم تُعالَج بسبب limit، أعد الاستدعاء لمتابعتها
+    errors: List[str] = Field(default_factory=list)
+
+
 # --- قنوات النشر ---
 class SocialChannelCreate(BaseModel):
     factory_id: int = Field(gt=0)

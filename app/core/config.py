@@ -123,6 +123,11 @@ class Settings:
     ADMIN_CONTACTS = _get_contacts("ADMIN_CONTACTS")
 
 
+    # مزامنة صور Google Drive عبر rclone: remote مُعدّ مسبقاً (rclone config)، ومجلدات المصانع المشارَكة معه.
+    RCLONE_BIN = _get("RCLONE_BIN", "rclone")
+    RCLONE_REMOTE = _get("RCLONE_REMOTE", "gdrive").rstrip(":")
+    DRIVE_SYNC_INTERVAL_SECONDS = _get_int("DRIVE_SYNC_INTERVAL_SECONDS") or 600
+
     REQUIRED = (
         "VERIFY_TOKEN",
         "META_APP_SECRET",

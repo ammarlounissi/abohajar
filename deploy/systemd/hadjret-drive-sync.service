@@ -1,0 +1,17 @@
+[Unit]
+Description=Hadjret Bladi Google Drive images sync (rclone)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ammar
+WorkingDirectory=/home/ammar/abohajar
+ExecStart=/home/ammar/abohajar/venv/bin/python -m app.jobs.sync_drive_media
+Restart=always
+RestartSec=30
+TimeoutStopSec=330
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

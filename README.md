@@ -533,3 +533,15 @@ python -m app.jobs.delete_posts --status failed --yes
 ### ريل كامل بمعرّف المصنع (`POST /api/factories/{id}/reel-post`)
 
 يجمع مساري الفيديو والوصف ومسار `POST /api/posts/from-factory-video` في طلب واحد. المهمتان تنفذهما عاملتا الفيديو والأوصاف الموجودتان، ويُسجَّل الطلب في جدول `factory_reel_requests`. بعد كل مهمة تستدعي العاملتان `finalize_pending()` فإذا اكتملت المهمتان يُنشأ المنشور المعتمد (`approved`، بلا موعد، بقنوات المصنع المفعّلة) ويُسجَّل `post_id`؛ وإذا فشلت إحداهما يُغلق الطلب `failed` بالسبب. مسار الحالة يحاول الإنهاء أيضاً كشبكة أمان. يلزم تشغيل **العاملتين معاً** وتنفيذ `alembic upgrade head`.
+
+
+### مزامنة صور Google Drive إلى مكتبة المصنع (rclone)
+
+المصنع يشارك مجلد صور مع حساب Drive الذي يعمل عليه rclone، فتُنسخ صوره تلقائياً إلى مكتبته ويُحفظ رابط كل صورة في جدول `media` (وأي صورة نُسخت تُسجَّل في `drive_synced_files` فلا تتكرر حتى لو حُذفت من المكتبة).
+
+1. **بريد المصنع**: يُسجَّل كجهة اتصال: `POST /api/factories/{id}/contacts` بالجسم `{"channel":"email","identifier":"factory@gmail.com"}`. يُعرَف مجلد المصنع بأن **مالكه** هو هذا البريد (المالك لا يُنتحل، فلا يضيف غريب صوراً لمصنع).
+2. **ما يُنسخ**: JPG وJPEG وPNG وWEBP حتى 20 ميغابايت، مع المجلدات الفرعية. غير الصالح يُسجَّل `skipped` ولا يُعاد.
+3. **الآن**: `POST /api/factories/{id}/drive-sync?limit=50` يرجع `copied` و`skipped` و`failed` و`remaining` (إن كان `remaining > 0` أعد الاستدعاء).
+4. **الخدمة الدورية**: `deploy/systemd/hadjret-drive-sync.service` تشغّل `python -m app.jobs.sync_drive_media` كل `DRIVE_SYNC_INTERVAL_SECONDS` (الافتراضي 600). تشغيل واحد للتجربة: `python -m app.jobs.sync_drive_media --once`.
+5. **الإعدادات في `.env`** (اختيارية): `RCLONE_BIN` (rclone) و`RCLONE_REMOTE` (gdrive) و`DRIVE_SYNC_INTERVAL_SECONDS`. الخدمة تعمل بالمستخدم `ammar` فتقرأ إعداد rclone الخاص به.
+6. التفعيل: `alembic upgrade head` ثم `sudo cp deploy/systemd/hadjret-drive-sync.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now hadjret-drive-sync`.

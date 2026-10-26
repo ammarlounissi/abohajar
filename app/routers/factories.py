@@ -7,6 +7,7 @@ from app import schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import factories as factory_service
+from app.services import drive_sync
 from app.services import factory_reel_requests
 from app.services import factory_video_jobs
 from app.services import factory_videos
@@ -200,3 +201,14 @@ def get_factory_reel_post(factory_id: int, request_id: int, db: Session = Depend
     """حالة الطلب. عند succeeded يوجد post_id (المنشور المعتمد)، وعند failed يظهر السبب في error."""
     request = factory_reel_requests.get_reel_request(db, factory_id, request_id)
     return factory_reel_requests.finalize_request(db, request.id)
+
+
+@router.post("/{factory_id}/drive-sync", response_model=schemas.DriveSyncResponse)
+def sync_factory_drive_images(
+    factory_id: int,
+    limit: int = Query(50, ge=1, le=500, description="أقصى عدد صور يُنسخ في هذا الاستدعاء"),
+    db: Session = Depends(get_db),
+):
+    """ينسخ الآن صور مجلد Google Drive المشارَك من بريد المصنع (المسجَّل كجهة اتصال email) إلى مكتبته.
+    يرجع ما نُسخ وما تبقى (remaining > 0 = أعد الاستدعاء). نفس ما تفعله الخدمة الدورية."""
+    return drive_sync.sync_factory(db, factory_id, limit=limit)
