@@ -8,7 +8,7 @@ import logging
 import signal
 import time
 
-from app.services import ollama_chat
+from app.services import factory_reel_requests, ollama_chat
 
 POLL_INTERVAL_SECONDS = 1.0
 _stop_requested = False
@@ -17,6 +17,14 @@ _stop_requested = False
 def _request_stop(_signum, _frame):
     global _stop_requested
     _stop_requested = True
+
+
+def _finalize_reel_requests() -> None:
+    """يُنهي طلبات الريل التي اكتملت مهمتاها؛ فشله لا يوقف العامل."""
+    try:
+        factory_reel_requests.finalize_pending()
+    except Exception:
+        logging.exception("Finalizing reel requests failed")
 
 
 def main(argv=None) -> int:
@@ -43,6 +51,7 @@ def main(argv=None) -> int:
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
         ollama_chat.process_description_job(job_id)
+        _finalize_reel_requests()
         if args.once:
             break
     return 0

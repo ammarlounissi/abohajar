@@ -190,6 +190,8 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | `POST /api/factories/{factory_id}/videos/generate` | وضع طلب التوليد في الطابور؛ يرجع `202 Accepted` ومعرّف المهمة |
 | `POST /api/factories/{factory_id}/videos/generate-random` | مسار الأتمتة دون جسم طلب: صور المكتبة + صوت وقالب عشوائيان + مدة 30 ثانية |
 | `GET /api/factories/{factory_id}/videos/jobs/{job_id}` | حالة المهمة ونتيجتها أو رسالة الفشل |
+| `POST /api/factories/{factory_id}/reel-post` | **ريل جاهز للنشر بمعرّف المصنع فقط**: يضع في الطابور فيديو مكتبة عشوائياً (30 ثانية) ووصف Ollama، ويرجع `202` مع `id` و`video_job_id` و`chat_job_id` و`status_url`. يشترط نشاطاً للمصنع، وصور مكتبة وملفات صوت، وقناة نشر مفعّلة واحدة على الأقل |
+| `GET /api/factories/{factory_id}/reel-post/{id}` | حالة الطلب: `pending` ← `succeeded` (ويظهر `post_id` للمنشور المعتمد) أو `failed` (والسبب في `error`) |
 
 مثال جسم طلب التوليد:
 ```json
@@ -526,3 +528,8 @@ python -m app.jobs.delete_posts --yes
 
 # اختياري: حذف حالة معيّنة فقط (draft/failed/published/…)	
 python -m app.jobs.delete_posts --status failed --yes
+
+
+### ريل كامل بمعرّف المصنع (`POST /api/factories/{id}/reel-post`)
+
+يجمع مساري الفيديو والوصف ومسار `POST /api/posts/from-factory-video` في طلب واحد. المهمتان تنفذهما عاملتا الفيديو والأوصاف الموجودتان، ويُسجَّل الطلب في جدول `factory_reel_requests`. بعد كل مهمة تستدعي العاملتان `finalize_pending()` فإذا اكتملت المهمتان يُنشأ المنشور المعتمد (`approved`، بلا موعد، بقنوات المصنع المفعّلة) ويُسجَّل `post_id`؛ وإذا فشلت إحداهما يُغلق الطلب `failed` بالسبب. مسار الحالة يحاول الإنهاء أيضاً كشبكة أمان. يلزم تشغيل **العاملتين معاً** وتنفيذ `alembic upgrade head`.

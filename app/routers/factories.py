@@ -7,6 +7,7 @@ from app import schemas
 from app.core.database import get_db
 from app.core.security import require_admin
 from app.services import factories as factory_service
+from app.services import factory_reel_requests
 from app.services import factory_video_jobs
 from app.services import factory_videos
 from app.services import media_library
@@ -176,3 +177,26 @@ def generate_random_factory_library_video(
 def get_factory_video_job(factory_id: int, job_id: int, db: Session = Depends(get_db)):
     """يعرض حالة مهمة توليد الفيديو ورابطه عند اكتمالها."""
     return factory_video_jobs.get_video_job(db, factory_id, job_id)
+
+
+@router.post(
+    "/{factory_id}/reel-post",
+    response_model=schemas.FactoryReelRequestAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_factory_reel_post(factory_id: int, db: Session = Depends(get_db)):
+    """بمعرّف المصنع فقط: يضع في الطابور فيديو مكتبة عشوائياً ووصف Ollama، وعند اكتمالهما ينشئ
+    منشور ريل معتمداً جاهزاً للنشر (الوسائط + الكابشن + قنوات المصنع). تابعه بمسار الحالة."""
+    request = factory_reel_requests.enqueue_reel_request(db, factory_id)
+    return schemas.FactoryReelRequestAccepted(
+        id=request.id, factory_id=factory_id, video_job_id=request.video_job_id,
+        chat_job_id=request.chat_job_id, status="pending",
+        status_url=f"/api/factories/{factory_id}/reel-post/{request.id}",
+    )
+
+
+@router.get("/{factory_id}/reel-post/{request_id}", response_model=schemas.FactoryReelRequestResponse)
+def get_factory_reel_post(factory_id: int, request_id: int, db: Session = Depends(get_db)):
+    """حالة الطلب. عند succeeded يوجد post_id (المنشور المعتمد)، وعند failed يظهر السبب في error."""
+    request = factory_reel_requests.get_reel_request(db, factory_id, request_id)
+    return factory_reel_requests.finalize_request(db, request.id)

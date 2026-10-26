@@ -141,6 +141,34 @@ class FactoryDescriptionJob(Base):
     factory = relationship("Factory", back_populates="description_jobs")
 
 
+class FactoryReelRequest(Base):
+    """طلب ريل كامل لمصنع: مهمة فيديو + مهمة وصف تُنشآن معاً، وعند نجاحهما يُنشأ منشور معتمد (post_id).
+    الحالات: pending (بانتظار المهمتين) -> finalizing (حجز إنشاء المنشور) -> succeeded | failed."""
+    __tablename__ = "factory_reel_requests"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    video_job_id = Column(Integer, ForeignKey("factory_video_jobs.id"), nullable=False)
+    chat_job_id = Column(Integer, ForeignKey("factory_description_jobs.id"), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    completed_at = Column(DateTime, nullable=True)
+
+    video_job = relationship("FactoryVideoJob")
+    chat_job = relationship("FactoryDescriptionJob")
+
+    @property
+    def video_status(self) -> str:
+        return self.video_job.status
+
+    @property
+    def chat_status(self) -> str:
+        return self.chat_job.status
+
+
 class FactoryContact(Base):
     """جهة اتصال للمصنع في قناة ما (واتساب/تيليجرام/بريد). المصنع الواحد قد يملك عدة قنوات،
     وإضافة قناة جديدة لا تغيّر المخطط. identifier مُطبَّع حسب القناة (انظر services/factories.py)."""

@@ -201,6 +201,31 @@ class FactoryVideoJobResponse(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class FactoryReelRequestAccepted(BaseModel):
+    id: int
+    factory_id: int
+    video_job_id: int
+    chat_job_id: int
+    status: Literal["pending"]
+    status_url: str
+
+
+class FactoryReelRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    factory_id: int
+    video_job_id: int
+    chat_job_id: int
+    video_status: str
+    chat_status: str
+    status: Literal["pending", "finalizing", "succeeded", "failed"]
+    post_id: Optional[int] = None
+    error: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
 # --- قنوات النشر ---
 class SocialChannelCreate(BaseModel):
     factory_id: int = Field(gt=0)
