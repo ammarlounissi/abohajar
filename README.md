@@ -537,10 +537,10 @@ python -m app.jobs.delete_posts --status failed --yes
 
 ### مزامنة صور Google Drive إلى مكتبة المصنع (rclone)
 
-المصنع يشارك مجلد صور مع حساب Drive الذي يعمل عليه rclone، فتُنسخ صوره تلقائياً إلى مكتبته ويُحفظ رابط كل صورة في جدول `media` (وأي صورة نُسخت تُسجَّل في `drive_synced_files` فلا تتكرر حتى لو حُذفت من المكتبة).
+المصنع يشارك مجلد صور وفيديوهات مع حساب Drive الذي يعمل عليه rclone، فتُنسخ صوره تلقائياً إلى مكتبته ويُحفظ رابط كل صورة في جدول `media` (وأي صورة نُسخت تُسجَّل في `drive_synced_files` فلا تتكرر حتى لو حُذفت من المكتبة).
 
 1. **بريد المصنع**: يُسجَّل كجهة اتصال: `POST /api/factories/{id}/contacts` بالجسم `{"channel":"email","identifier":"factory@gmail.com"}`. يُعرَف مجلد المصنع بأن **مالكه** هو هذا البريد (المالك لا يُنتحل، فلا يضيف غريب صوراً لمصنع).
-2. **ما يُنسخ**: JPG وJPEG وPNG وWEBP حتى 20 ميغابايت، مع المجلدات الفرعية. غير الصالح يُسجَّل `skipped` ولا يُعاد.
+2. **ما يُنسخ**: صور JPG وJPEG وPNG وWEBP حتى 20 ميغابايت، وفيديوهات MP4 وMOV وWEBM حتى 100 ميغابايت (يُفحص سلامتها بـ ffprobe إن وُجد)، مع المجلدات الفرعية. الفيديو يُحفظ في المكتبة بـ `media_type=video`. غير الصالح يُسجَّل `skipped` ولا يُعاد.
 3. **الآن**: `POST /api/factories/{id}/drive-sync?limit=50` يرجع `copied` و`skipped` و`failed` و`remaining` (إن كان `remaining > 0` أعد الاستدعاء).
 4. **الخدمة الدورية**: `deploy/systemd/hadjret-drive-sync.service` تشغّل `python -m app.jobs.sync_drive_media` كل `DRIVE_SYNC_INTERVAL_SECONDS` (الافتراضي 600). تشغيل واحد للتجربة: `python -m app.jobs.sync_drive_media --once`.
 5. **الإعدادات في `.env`** (اختيارية): `RCLONE_BIN` (rclone) و`RCLONE_REMOTE` (gdrive) و`DRIVE_SYNC_INTERVAL_SECONDS`. الخدمة تعمل بالمستخدم `ammar` فتقرأ إعداد rclone الخاص به.

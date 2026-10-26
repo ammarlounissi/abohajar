@@ -56,14 +56,14 @@ class DriveSyncCase(unittest.TestCase):
         self.downloads = []
         self.payloads = {}
 
-        def fake_download(folder_id, path, destination):
+        def fake_download(folder_id, path, destination, kind="image"):
             self.downloads.append((folder_id, path))
             destination.write_bytes(self.payloads.get(path, png_bytes()))
 
         for target, value in (
             ("list_shared_folders", lambda: self.folders),
-            ("list_folder_images", lambda folder_id: list(self.images[folder_id])),
-            ("download_image", fake_download),
+            ("list_folder_media", lambda folder_id: list(self.images[folder_id])),
+            ("download_media", fake_download),
         ):
             patcher = mock.patch.object(drive_sync, target, value)
             patcher.start()
@@ -128,14 +128,14 @@ class SyncFactoryTests(DriveSyncCase):
         self.assertEqual(report.skipped, 1)
 
     def test_download_failure_is_retried_next_run(self):
-        original = drive_sync.download_image
+        original = drive_sync.download_media
 
-        def flaky(folder_id, path, destination):
+        def flaky(folder_id, path, destination, kind="image"):
             if path == "a.png":
                 raise drive_sync.DriveSyncError("network")
-            original(folder_id, path, destination)
+            original(folder_id, path, destination, kind)
 
-        with mock.patch.object(drive_sync, "download_image", flaky):
+        with mock.patch.object(drive_sync, "download_media", flaky):
             report = self.sync()
         self.assertEqual((report.copied, report.failed), (1, 1))
         self.assertIn("a.png", report.errors[0])
@@ -163,6 +163,54 @@ class SyncFactoryTests(DriveSyncCase):
             ))
             db.commit()
         self.assertEqual(self.sync().copied, 2)
+
+
+class VideoTests(DriveSyncCase):
+    def add_video(self, size=1000, name="v.mp4"):
+        self.images["F1"] = [{"id": "v", "path": name, "name": name, "size": size, "modtime": "1", "kind": "video"}]
+        self.payloads[name] = b"fake-video-bytes"
+
+    def probe(self, returncode=0, stdout="3.5\n"):
+        done = mock.Mock(returncode=returncode, stdout=stdout)
+        return mock.patch.multiple(
+            drive_sync, find_tool=mock.Mock(return_value="ffprobe"), subprocess=mock.Mock(run=mock.Mock(return_value=done)),
+        )
+
+    def test_video_is_copied_as_video_media(self):
+        self.add_video()
+        with self.probe():
+            report = self.sync()
+        self.assertEqual((report.copied, report.skipped), (1, 0))
+        with self.Session() as db:
+            item = db.query(models.Media).one()
+            self.assertEqual(item.media_type, "video")
+            self.assertTrue(item.url.endswith(".mp4"))
+
+    def test_broken_video_is_skipped(self):
+        self.add_video()
+        with self.probe(returncode=1, stdout=""):
+            report = self.sync()
+        self.assertEqual((report.copied, report.skipped), (0, 1))
+        with self.Session() as db:
+            self.assertEqual(db.query(models.Media).count(), 0)
+
+    def test_oversized_video_is_skipped(self):
+        self.add_video(size=drive_sync.MAX_VIDEO_BYTES + 1)
+        self.assertEqual(self.sync().skipped, 1)
+
+    def test_without_ffprobe_video_is_still_copied(self):
+        self.add_video()
+        with mock.patch.object(drive_sync, "find_tool", return_value=None):
+            self.assertEqual(self.sync().copied, 1)
+
+
+class MediaKindTests(unittest.TestCase):
+    def test_kinds(self):
+        self.assertEqual(drive_sync.media_kind("a.JPG", "image/jpeg"), "image")
+        self.assertEqual(drive_sync.media_kind("a.mov", "video/quicktime"), "video")
+        self.assertEqual(drive_sync.media_kind("a.mp4", "image/png"), None)      # امتداد ونوع متعارضان
+        self.assertIsNone(drive_sync.media_kind("a.pdf", "application/pdf"))
+        self.assertIsNone(drive_sync.media_kind("a.gif", "image/gif"))
 
 
 class SyncAllTests(DriveSyncCase):

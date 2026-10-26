@@ -1,10 +1,10 @@
-"""نسخ صور مجلدات Google Drive التي يشاركها المصنع مع حساب المشروع إلى مكتبة وسائطه (عبر rclone).
+"""نسخ صور وفيديوهات مجلدات Google Drive التي يشاركها المصنع مع حساب المشروع إلى مكتبة وسائطه (عبر rclone).
 
 التعرف على مجلد المصنع: المجلد المشارَك الذي مالكه (owner) هو بريد المصنع المسجَّل كجهة اتصال
 channel=email. المالك لا يمكن انتحاله، فلا يستطيع غريب شارك مجلداً أن يضيف صوراً لمصنع.
-لكل صورة جديدة: تنزيل مؤقت -> تحقق (حجم/صورة سليمة) -> media_library.upload_factory_media (يحفظ الملف
+لكل ملف جديد: تنزيل مؤقت -> تحقق (حجم/صورة سليمة بـ PIL، فيديو سليم بـ ffprobe) -> media_library.upload_factory_media (يحفظ الملف
 ويكتب رابطه في جدول media) -> تسجيلها في drive_synced_files كي لا تتكرر. الشبكة وrclone معزولان في
-دوال صغيرة (list_shared_folders / list_folder_images / download_image) ليسهل استبدالها في الاختبار.
+دوال صغيرة (list_shared_folders / list_folder_media / download_media) ليسهل استبدالها في الاختبار.
 اتفاقية الحفظ: sync_* تنفّذ commit بنفسها."""
 import json
 import logging
@@ -25,12 +25,17 @@ from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models import Channel
 from app.services import media_library
+from app.services.ffmpeg_tools import find_tool
 from app.services.errors import InvalidInputError, NotFoundError, ServiceError
 from app.services.factories import get_factory
 
 logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_VIDEO_BYTES = media_library.MAX_UPLOAD_BYTES      # 100 ميغابايت، سقف مكتبة المصنع نفسها
+PROBE_TIMEOUT = 60
+VIDEO_DOWNLOAD_TIMEOUT = 900
 MAX_IMAGE_PIXELS = 50_000_000
 STALE_COPYING_MINUTES = 30
 LIST_TIMEOUT = 120
@@ -43,7 +48,7 @@ class DriveSyncError(ServiceError):
 
 
 class SkipFile(Exception):
-    """ملف لن يُنسخ أبداً (ليس صورة سليمة، أو كبير جداً). يُسجَّل skipped فلا يُعاد تنزيله."""
+    """ملف لن يُنسخ أبداً (ليس صورة/فيديو سليماً، أو كبير جداً). يُسجَّل skipped فلا يُعاد تنزيله."""
 
 
 @dataclass
@@ -90,8 +95,18 @@ def list_shared_folders() -> List[dict]:
     ]
 
 
-def list_folder_images(folder_id: str) -> List[dict]:
-    """صور المجلد (مع المجلدات الفرعية): [{"id", "path", "name", "size", "modtime"}] مرتبة بالأقدم أولاً."""
+def media_kind(name: str, mime_type: str = "") -> Optional[str]:
+    """"image" أو "video" إن كان الملف من الأنواع المدعومة (بالامتداد ونوع MIME معاً)، وإلا None."""
+    extension = Path(name).suffix.lower()
+    if extension in IMAGE_EXTENSIONS and (not mime_type or mime_type.startswith("image/")):
+        return "image"
+    if extension in VIDEO_EXTENSIONS and (not mime_type or mime_type.startswith("video/")):
+        return "video"
+    return None
+
+
+def list_folder_media(folder_id: str) -> List[dict]:
+    """صور وفيديوهات المجلد (مع الفرعية): [{"id","path","name","size","modtime","kind"}] بالأقدم أولاً."""
     out = _rclone(
         "lsjson", f"{settings.RCLONE_REMOTE}:", f"--drive-root-folder-id={folder_id}", "-R", "--files-only",
         timeout=LIST_TIMEOUT,
@@ -100,21 +115,20 @@ def list_folder_images(folder_id: str) -> List[dict]:
         items = json.loads(out or "[]")
     except ValueError as exc:
         raise DriveSyncError("ردّ rclone ليس JSON صالحاً") from exc
-    images = [
+    found = [
         {"id": item["ID"], "path": item.get("Path") or item["Name"], "name": item["Name"],
-         "size": item.get("Size"), "modtime": item.get("ModTime", "")}
-        for item in items
-        if item.get("ID") and item.get("Name")
-        and Path(item["Name"]).suffix.lower() in IMAGE_EXTENSIONS
-        and str(item.get("MimeType", "image/")).startswith("image/")
+         "size": item.get("Size"), "modtime": item.get("ModTime", ""),
+         "kind": media_kind(item["Name"], str(item.get("MimeType", "")))}
+        for item in items if item.get("ID") and item.get("Name")
     ]
-    return sorted(images, key=lambda image: image["modtime"])
+    return sorted((m for m in found if m["kind"]), key=lambda media: media["modtime"])
 
 
-def download_image(folder_id: str, path: str, destination: Path) -> None:
+def download_media(folder_id: str, path: str, destination: Path, kind: str = "image") -> None:
     _rclone(
         "copyto", f"{settings.RCLONE_REMOTE}:{path}", str(destination),
-        f"--drive-root-folder-id={folder_id}", timeout=DOWNLOAD_TIMEOUT,
+        f"--drive-root-folder-id={folder_id}",
+        timeout=VIDEO_DOWNLOAD_TIMEOUT if kind == "video" else DOWNLOAD_TIMEOUT,
     )
 
 
@@ -125,6 +139,25 @@ def factory_email(db: Session, factory_id: int) -> Optional[str]:
         models.FactoryContact.factory_id == factory_id, models.FactoryContact.channel == Channel.EMAIL.value,
     ).order_by(models.FactoryContact.id).first()
     return contact.identifier if contact else None
+
+
+def _verify_video(path: Path, size: Optional[int]) -> None:
+    if (size or path.stat().st_size) > MAX_VIDEO_BYTES:
+        raise SkipFile("حجم الفيديو يتجاوز 100 ميغابايت")
+    ffprobe = find_tool("ffprobe")
+    if not ffprobe:
+        logger.warning("ffprobe غير متوفر: نُسخ الفيديو دون فحص سلامته")
+        return
+    try:
+        done = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False,
+        )
+        duration = float(done.stdout.strip().splitlines()[0]) if done.returncode == 0 and done.stdout.strip() else 0
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        duration = 0
+    if duration <= 0:
+        raise SkipFile("الملف ليس فيديو سليماً")
 
 
 def _verify_image(path: Path, size: Optional[int]) -> None:
@@ -151,6 +184,7 @@ def _recover_stale(db: Session) -> None:
 
 
 def _copy_one(db: Session, factory_id: int, folder: dict, image: dict, report: SyncReport) -> None:
+    kind = image.get("kind", "image")
     row = models.DriveSyncedFile(
         factory_id=factory_id, drive_file_id=image["id"], name=image["name"][:500],
         size_bytes=image["size"] if isinstance(image["size"], int) else None, status="copying",
@@ -171,8 +205,9 @@ def _copy_one(db: Session, factory_id: int, folder: dict, image: dict, report: S
     try:
         with tempfile.TemporaryDirectory(prefix="drive-sync-") as tmp:
             local = Path(tmp) / f"file{Path(image['name']).suffix.lower()}"
-            download_image(folder["id"], image["path"], local)
-            _verify_image(local, image["size"] if isinstance(image["size"], int) else None)
+            download_media(folder["id"], image["path"], local, kind)
+            size = image["size"] if isinstance(image["size"], int) else None
+            (_verify_video if kind == "video" else _verify_image)(local, size)
             with local.open("rb") as handle:
                 item = media_library.upload_factory_media(
                     db, factory_id, file=handle, filename=local.name, content_type=None,
@@ -212,7 +247,7 @@ def sync_factory(
     budget = limit
     for folder in mine:
         try:
-            images = [image for image in list_folder_images(folder["id"]) if image["id"] not in known]
+            images = [image for image in list_folder_media(folder["id"]) if image["id"] not in known]
         except DriveSyncError as exc:
             report.errors.append(f"{folder['name']}: {exc}")
             continue
