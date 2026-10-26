@@ -302,6 +302,7 @@ python -m app.jobs.posts show 12             # حالة كل منصة وآخر �
 | `GET /api/posts/published` | المنشورة فقط (الأحدث نشرًا أولًا)، مع `limit` و`offset` |
 | `GET /api/posts/unpublished` | غير المنشورة: draft وscheduled وapproved وpublishing وfailed (المؤرشفة مستثناة) |
 | `POST /api/posts/` | إنشاء، ويقبل `channel_ids: [1, 3]` (معرّفات `social_channels.id`) لتحديد القنوات |
+| `POST /api/posts/from-factory-video` | ريل معتمد بثلاثة معرّفات فقط `{factory_id, video_id, chat_id}`: `video_id` معرّف مهمة الفيديو و`chat_id` معرّف مهمة الوصف (كلتاهما `succeeded` وتتبعان المصنع). الوسائط = `video_url`، والوصف = رد Ollama + `factories.phone_number` + وسوم مقترحة، والقنوات = قنوات المصنع المفعّلة، و`status`/`approval` = approved و`scheduled_at` = null فيلتقطه المؤقت فوراً |
 | `PATCH /api/posts/{id}` | تعديل، ومع `channel_ids` تُستبدل القنوات (الناجحة منها تبقى كسجل) |
 | `GET /api/posts/{id}` | منشور واحد مع `deliveries` (قناة وحالة كل وجهة: `channel_id` و`platform` و`channel_name`) |
 | `POST /api/posts/{id}/publish` | نشر يدوي فوري: يرجع 202 بحالة publishing والنشر في الخلفية؛ تابعه بـ GET السابق. يتجاوز الموعد والسقف اليومي، ويرفض المنشور أو قيد النشر بـ 409 |

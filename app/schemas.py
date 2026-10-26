@@ -499,6 +499,15 @@ class PreparedPostsResponse(BaseModel):
     last_scheduled_at: Optional[datetime] = None
 
 
+class FactoryReelPostRequest(BaseModel):
+    """ثلاثة معرّفات فقط: الباقي (الوسائط والوصف والهاتف والوسوم والقنوات) يُستخرج منها."""
+    model_config = ConfigDict(extra="forbid")
+
+    factory_id: int = Field(gt=0)
+    video_id: int = Field(gt=0, description="معرّف مهمة توليد الفيديو (factory_video_jobs)")
+    chat_id: int = Field(gt=0, description="معرّف مهمة الوصف عبر Ollama (factory_description_jobs)")
+
+
 class PostDeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     channel_id: int

@@ -294,3 +294,63 @@ class PublishNowTests(RouterCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FactoryReelPostTests(RouterCase):
+    URL = "/api/posts/from-factory-video"
+
+    def add_jobs(self, factory_id=1, video_status="succeeded", chat_status="succeeded"):
+        with self.Session() as db:
+            video = models.FactoryVideoJob(
+                factory_id=factory_id, source="library", template="cinematic_30", duration=30,
+                status=video_status, video_url="https://api.example.com/api/media/factories/1/a.mp4",
+            )
+            chat = models.FactoryDescriptionJob(
+                factory_id=factory_id, prompt="p", messages=[], model="m", status=chat_status,
+                response="  وصف تسويقي للمصنع  ",
+            )
+            db.add_all([video, chat])
+            db.commit()
+            return video.id, chat.id
+
+    def test_creates_approved_reel_with_all_active_channels(self):
+        video_id, chat_id = self.add_jobs()
+        r = self.client.post(self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id})
+        self.assertEqual(r.status_code, 201, r.text)
+        body = r.json()
+        self.assertEqual(body["media_type"], "reel")
+        self.assertEqual(body["media_urls"], ["https://api.example.com/api/media/factories/1/a.mp4"])
+        self.assertEqual((body["status"], body["approval"]), ("approved", "approved"))
+        self.assertIsNone(body["scheduled_at"])
+        self.assertEqual(sorted(d["channel_id"] for d in body["deliveries"]), [1, 2])   # 3 معطّلة و4 لمصنع آخر
+        self.assertTrue(body["description"].startswith("وصف تسويقي للمصنع\n"))
+        self.assertIn("213550000000", body["description"])
+        self.assertIn("#حجرة_بلادي", body["description"])
+
+    def test_rejects_extra_params(self):
+        video_id, chat_id = self.add_jobs()
+        r = self.client.post(self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id, "x": 1})
+        self.assertEqual(r.status_code, 422)
+
+    def test_unfinished_jobs_are_conflict(self):
+        video_id, chat_id = self.add_jobs(video_status="running")
+        self.assertEqual(self.client.post(
+            self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id}).status_code, 409)
+        video_id, chat_id = self.add_jobs(chat_status="queued")
+        self.assertEqual(self.client.post(
+            self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id}).status_code, 409)
+
+    def test_jobs_of_another_factory_are_not_found(self):
+        video_id, chat_id = self.add_jobs(factory_id=2)
+        r = self.client.post(self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.client.get("/api/posts/").json(), [])
+
+    def test_factory_without_active_channels_is_rejected_without_post(self):
+        with self.Session() as db:
+            db.query(models.SocialChannel).filter(models.SocialChannel.factory_id == 1).update({"is_active": False})
+            db.commit()
+        video_id, chat_id = self.add_jobs()
+        r = self.client.post(self.URL, json={"factory_id": 1, "video_id": video_id, "chat_id": chat_id})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(self.client.get("/api/posts/").json(), [])
