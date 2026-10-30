@@ -91,6 +91,7 @@ class OllamaChatRouterTests(unittest.TestCase):
         self.assertEqual(messages[1]["content"], "صناعة الحجر الطبيعي")
         self.assertTrue(messages[0]["content"].startswith(
             f"{ollama_chat.SYSTEM_INSTRUCTION.replace('{factory_name}', 'مصنع الاختبار')}\n\n"
+            f"{ollama_chat.STONE_TERMINOLOGY}\n\n"
             "بيانات المصنع:\nالاسم: مصنع الاختبار\nالنشاط: صناعة الحجر الطبيعي\n\n"
             "التنويع (إلزامي):"
         ))
