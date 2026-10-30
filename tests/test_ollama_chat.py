@@ -1,4 +1,5 @@
 import json
+import random
 import unittest
 from unittest import mock
 
@@ -84,19 +85,16 @@ class OllamaChatRouterTests(unittest.TestCase):
         )
         self.assertIn("id", body)
         self.assertIn("created_at", body)
-        generate.assert_awaited_once_with(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        f"{ollama_chat.SYSTEM_INSTRUCTION}\n\n"
-                        "بيانات المصنع:\nالاسم: مصنع الاختبار\nالنشاط: صناعة الحجر الطبيعي"
-                    ),
-                },
-                {"role": "user", "content": "صناعة الحجر الطبيعي"},
-            ],
-            settings.OLLAMA_MODEL,
-        )
+        messages, model = generate.await_args.args
+        self.assertEqual(model, settings.OLLAMA_MODEL)
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+        self.assertEqual(messages[1]["content"], "صناعة الحجر الطبيعي")
+        self.assertTrue(messages[0]["content"].startswith(
+            f"{ollama_chat.SYSTEM_INSTRUCTION.replace('{factory_name}', 'مصنع الاختبار')}\n\n"
+            "بيانات المصنع:\nالاسم: مصنع الاختبار\nالنشاط: صناعة الحجر الطبيعي\n\n"
+            "التنويع (إلزامي):"
+        ))
+        self.assertNotIn("الأوصاف السابقة", messages[0]["content"])
         with self.Session() as db:
             saved = db.query(models.FactoryChatMessage).one()
             self.assertEqual(
@@ -104,7 +102,7 @@ class OllamaChatRouterTests(unittest.TestCase):
                 (1, "صناعة الحجر الطبيعي", "مرحباً بك"),
             )
 
-    def test_factory_history_is_sent_as_context_and_extended(self):
+    def test_factory_history_is_sent_as_avoid_list_and_extended(self):
         with mock.patch(
             "app.services.ollama_chat.generate_reply",
             new_callable=mock.AsyncMock,
@@ -124,14 +122,14 @@ class OllamaChatRouterTests(unittest.TestCase):
             [(message["role"], message["content"]) for message in first_messages[1:]],
             [("user", "صناعة الحجر الطبيعي")],
         )
+        self.assertNotIn("الأوصاف السابقة", first_messages[0]["content"])
+        # الرد السابق يظهر في قائمة التجنّب داخل رسالة النظام، لا كدور assistant.
         self.assertEqual(
             [(message["role"], message["content"]) for message in second_messages[1:]],
-            [
-                ("user", "صناعة الحجر الطبيعي"),
-                ("assistant", "الرد الأول"),
-                ("user", "صناعة الحجر الطبيعي"),
-            ],
+            [("user", "صناعة الحجر الطبيعي")],
         )
+        self.assertIn("الأوصاف السابقة", second_messages[0]["content"])
+        self.assertIn("* الرد الأول", second_messages[0]["content"])
         with self.Session() as db:
             self.assertEqual(db.query(models.FactoryChatMessage).count(), 2)
 
@@ -230,17 +228,24 @@ class OllamaChatRouterTests(unittest.TestCase):
         self.assertTrue(succeeded)
         self.assertEqual(response.status_code, 200)
         messages = generate.await_args.args[0]
-        self.assertEqual(len(messages), 12)
+        self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("مصنع الاختبار", messages[0]["content"])
         self.assertIn("صناعة الحجر الطبيعي", messages[0]["content"])
-        self.assertEqual(
-            [message["content"] for message in messages[1:]],
-            [
-                "سؤال 2", "رد 2", "سؤال 3", "رد 3", "سؤال 4",
-                "رد 4", "سؤال 5", "رد 5", "سؤال 6", "رد 6", "صناعة الحجر الطبيعي",
-            ],
-        )
+        for kept in ("رد 2", "رد 3", "رد 4", "رد 5", "رد 6"):
+            self.assertIn(f"* {kept}", messages[0]["content"])
+        for dropped in ("رد 0", "رد 1"):
+            self.assertNotIn(dropped, messages[0]["content"])
+        self.assertEqual(messages[1]["content"], "صناعة الحجر الطبيعي")
+
+    def test_variation_differs_between_requests(self):
+        factory = models.Factory(id=1, name="م", activity="نشاط")
+        blocks = {
+            ollama_chat._conversation_messages(factory, [], "نشاط", random.Random(seed))[0]["content"]
+            for seed in range(20)
+        }
+        self.assertGreater(len(blocks), 5)
+
 
 class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_generate_reply_calls_ollama_chat_endpoint(self):
@@ -274,6 +279,7 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
                     {"role": "user", "content": "اكتب وصفاً"},
                 ],
                 "stream": False,
+                "options": ollama_chat.GENERATION_OPTIONS,
             },
         )
 

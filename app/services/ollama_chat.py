@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -17,10 +18,35 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_TURNS = 5
 SessionFactory = Callable[[], Session]
 SYSTEM_INSTRUCTION = (
-    "أنت كاتب محتوى لمشروع حجرت بلادي. اكتب وصفاً تسويقياً عربياً موجزاً يصلح لمنشور "
+    "أنت كاتب محتوى للمصنع «{factory_name}». اكتب وصفاً تسويقياً عربياً موجزاً يصلح لمنشور "
     "على مواقع التواصل اعتماداً على نشاط المصنع وسياق المحادثة فقط. لا تخترع أسعاراً أو "
     "مواصفات أو منتجات غير مذكورة، وأعد نص الوصف فقط دون مقدمة أو شرح."
 )
+
+# تنويع الأوصاف: يُختار عنصر عشوائي من كل قائمة عند كل طلب حتى لا يتكرر الناتج.
+VARIATION_ANGLES = (
+    "جمال الشكل والملمس الطبيعي",
+    "المتانة وطول العمر",
+    "الإحساس الذي يضيفه للمكان (دفء، أصالة، فخامة)",
+    "فكرة استعماله في واجهة أو جدار",
+    "الصنع المحلي والفخر بالمنتج الوطني",
+    "دعوة مباشرة للتواصل وطلب المنتج",
+)
+VARIATION_OPENINGS = (
+    "سؤال موجّه للقارئ",
+    "جملة قصيرة قوية",
+    "وصف مشهد",
+    "عبارة تشويقية",
+    "ذكر النشاط مباشرة",
+)
+VARIATION_TONES = ("راقية وهادئة", "حماسية", "دافئة وقريبة من الزبون", "عملية ومباشرة")
+VARIATION_LENGTHS = ("جملتان", "ثلاث جمل", "أربع جمل قصيرة")
+VARIATION_EMOJI = ("بدون إيموجي", "إيموجي واحد فقط", "إيموجيان كحد أقصى")
+AVOID_PREVIOUS_LIMIT = 5
+AVOID_PREVIOUS_CHARS = 220
+
+# إعدادات توليد أعلى تنوعاً (لا seed ثابت عمداً).
+GENERATION_OPTIONS = {"temperature": 0.9, "top_p": 0.95, "repeat_penalty": 1.15}
 
 
 def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.AsyncClient:
@@ -31,18 +57,48 @@ class OllamaUnavailableError(Exception):
     """Ollama did not return a usable response."""
 
 
+def _variation_block(
+    history: list[models.FactoryChatMessage], rng: random.Random,
+) -> str:
+    lines = [
+        "التنويع (إلزامي):",
+        f"- زاوية الوصف: {rng.choice(VARIATION_ANGLES)}",
+        f"- أسلوب الافتتاح: {rng.choice(VARIATION_OPENINGS)}",
+        f"- النبرة: {rng.choice(VARIATION_TONES)}",
+        f"- الطول: {rng.choice(VARIATION_LENGTHS)}",
+        f"- {rng.choice(VARIATION_EMOJI)}",
+    ]
+    previous = [
+        " ".join(m.response.split())[:AVOID_PREVIOUS_CHARS]
+        for m in history[-AVOID_PREVIOUS_LIMIT:]
+        if m.response and m.response.strip()
+    ]
+    if previous:
+        lines.append(
+            "- لا تبدأ بكلمة أو عبارة وردت في الأوصاف السابقة أدناه، ولا تعد استعمال "
+            "جملها أو تراكيبها:"
+        )
+        lines.extend(f"  * {text}" for text in previous)
+    return "\n".join(lines)
+
+
 def _conversation_messages(
-    factory: models.Factory, history: list[models.FactoryChatMessage], prompt: str
+    factory: models.Factory,
+    history: list[models.FactoryChatMessage],
+    prompt: str,
+    rng: Optional[random.Random] = None,
 ) -> list[dict[str, str]]:
-    profile = f"{SYSTEM_INSTRUCTION}\n\nبيانات المصنع:\nالاسم: {factory.name}\nالنشاط: {factory.activity or 'غير محدد'}"
-    messages = [{"role": "system", "content": profile}]
-    for message in history:
-        messages.extend((
-            {"role": "user", "content": message.prompt},
-            {"role": "assistant", "content": message.response},
-        ))
-    messages.append({"role": "user", "content": prompt})
-    return messages
+    # الأوصاف السابقة تُرسل كقائمة «تجنّب» داخل رسالة النظام وليست أدواراً حوارية،
+    # لأن تكرار نفس السؤال مع أجوبته السابقة يدفع النموذج لنسخ الجواب نفسه.
+    rng = rng or random.Random()
+    profile = (
+        f"{SYSTEM_INSTRUCTION.replace('{factory_name}', factory.name)}\n\nبيانات المصنع:\nالاسم: {factory.name}\n"
+        f"النشاط: {factory.activity or 'غير محدد'}\n\n{_variation_block(history, rng)}"
+    )
+    return [
+        {"role": "system", "content": profile},
+        {"role": "user", "content": prompt},
+    ]
 
 
 async def generate_reply(
@@ -56,6 +112,7 @@ async def generate_reply(
                     "model": model or settings.OLLAMA_MODEL,
                     "messages": messages,
                     "stream": False,
+                    "options": GENERATION_OPTIONS,
                 },
             )
             response.raise_for_status()
