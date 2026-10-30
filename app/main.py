@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Hojrat Bladi API", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="IkhlasDZ Bot", version="1.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
