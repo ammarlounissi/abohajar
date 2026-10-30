@@ -5,6 +5,7 @@
 - GET حالة الطلب يستدعي finalize_request() أيضاً كشبكة أمان.
 الإنهاء متكرر الأمان: حجز pending -> finalizing بجملة UPDATE واحدة يمنع إنشاء منشورين لطلب واحد."""
 import logging
+import random
 from typing import Callable
 
 from sqlalchemy.orm import Session
@@ -59,6 +60,23 @@ def _close(db: Session, request: models.FactoryReelRequest, status: str, error: 
     db.refresh(request)
 
 
+def _random_previous_description(db: Session, factory_id: int):
+    """وصف عشوائي من رسائل Ollama المحفوظة لهذا المصنع، أو None إن لم يوجد."""
+    rows = [r[0] for r in db.query(models.FactoryChatMessage.response).filter(
+        models.FactoryChatMessage.factory_id == factory_id,
+        models.FactoryChatMessage.response.isnot(None),
+    ) if r[0] and r[0].strip()]
+    return random.choice(rows) if rows else None
+
+
+def _random_library_video(db: Session, factory_id: int):
+    """رابط فيديو عشوائي من مكتبة وسائط هذا المصنع (media من نوع video)، أو None إن لم يوجد."""
+    urls = [r[0] for r in db.query(models.Media.url).filter(
+        models.Media.factory_id == factory_id, models.Media.media_type == "video",
+    ) if r[0] and r[0].strip()]
+    return random.choice(urls) if urls else None
+
+
 def finalize_request(db: Session, request_id: int) -> models.FactoryReelRequest:
     """ينهي الطلب إن اكتملت مهمتاه (ينشئ المنشور) أو فشلت إحداهما (يغلقه فاشلاً). غير ذلك لا يغيّر شيئاً."""
     request = db.get(models.FactoryReelRequest, request_id)
@@ -68,15 +86,28 @@ def finalize_request(db: Session, request_id: int) -> models.FactoryReelRequest:
     db.refresh(request.chat_job)
     video, chat = request.video_job, request.chat_job
 
+    fallback = fallback_video = None
     failures = []
     if video.status == "failed":
-        failures.append(f"فشل الفيديو: {video.error or 'سبب غير معروف'}")
+        fallback_video = _random_library_video(db, request.factory_id)
+        if fallback_video is None:
+            failures.append(f"فشل الفيديو: {video.error or 'سبب غير معروف'}")
+        else:
+            logger.warning("Reel request %s: video job failed (%s); using a library video",
+                           request_id, video.error)
     if chat.status == "failed":
-        failures.append(f"فشل الوصف: {chat.error or 'سبب غير معروف'}")
+        fallback = _random_previous_description(db, request.factory_id)
+        if fallback is None:
+            failures.append(f"فشل الوصف: {chat.error or 'سبب غير معروف'}")
+        else:
+            logger.warning("Reel request %s: description job failed (%s); using a previous description",
+                           request_id, chat.error)
     if failures:
         _close(db, request, "failed", "؛ ".join(failures))
         return request
-    if video.status != "succeeded" or chat.status != "succeeded":
+    if (video.status != "succeeded" and fallback_video is None) or (
+        chat.status != "succeeded" and fallback is None
+    ):
         return request
 
     claimed = db.query(models.FactoryReelRequest).filter(
@@ -87,7 +118,9 @@ def finalize_request(db: Session, request_id: int) -> models.FactoryReelRequest:
         db.refresh(request)
         return request
     try:
-        post = factory_reel_posts.create_reel_post(db, request.factory_id, video.id, chat.id)
+        post = factory_reel_posts.create_reel_post(
+            db, request.factory_id, video.id, chat.id, fallback_response=fallback, fallback_video_url=fallback_video,
+        )
     except ServiceError as exc:
         db.rollback()
         _close(db, request, "failed", str(exc))

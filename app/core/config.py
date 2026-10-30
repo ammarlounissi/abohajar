@@ -61,6 +61,9 @@ class Settings:
     ADMIN_API_KEY = _get("ADMIN_API_KEY")
     OLLAMA_BASE_URL = _get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     OLLAMA_MODEL = _get("OLLAMA_MODEL", "qwen2.5:3b")
+    OLLAMA_TIMEOUT = _get_int("OLLAMA_TIMEOUT") or 600   # ثوانٍ؛ يطول التوليد حين يرندر ffmpeg على نفس المعالج
+    OLLAMA_ATTEMPTS = _get_int("OLLAMA_ATTEMPTS") or 2     # محاولات التوليد عند انتهاء المهلة أو انقطاع الاتصال
+    FFMPEG_NICE = _get_int("FFMPEG_NICE") or 15            # أولوية منخفضة لـ ffmpeg كي لا يُجوّع Ollama
     ALLOWED_ORIGINS = [
     o.strip( )
     for o in _get(

@@ -119,6 +119,59 @@ class FinalizeTests(ReelRequestCase):
             self.assertIn("فشل الفيديو: ffmpeg", request.error)
             self.assertEqual(db.query(models.Post).count(), 0)
 
+    def test_failed_description_falls_back_to_previous_ollama_message(self):
+        request_id, video_id, chat_id = self.enqueue()
+        with self.Session() as db:
+            db.add(models.FactoryChatMessage(factory_id=1, prompt="p", response="وصف قديم للمصنع"))
+            db.commit()
+        self.finish(video_id, chat_id, chat="failed")
+        reels.finalize_pending(self.Session)
+        with self.Session() as db:
+            request = db.get(models.FactoryReelRequest, request_id)
+            self.assertEqual(request.status, "succeeded")
+            self.assertTrue(db.get(models.Post, request.post_id).description.startswith("وصف قديم للمصنع\n"))
+
+    def test_failed_description_without_previous_message_still_fails(self):
+        request_id, video_id, chat_id = self.enqueue()
+        self.finish(video_id, chat_id, chat="failed")
+        reels.finalize_pending(self.Session)
+        with self.Session() as db:
+            request = db.get(models.FactoryReelRequest, request_id)
+            self.assertEqual(request.status, "failed")
+            self.assertIn("فشل الوصف: ollama", request.error)
+
+    def test_failed_description_waits_for_video_when_fallback_exists(self):
+        request_id, video_id, chat_id = self.enqueue()
+        with self.Session() as db:
+            db.add(models.FactoryChatMessage(factory_id=1, prompt="p", response="وصف قديم"))
+            db.commit()
+        self.finish(video_id, chat_id, video="queued", chat="failed")
+        reels.finalize_pending(self.Session)
+        with self.Session() as db:
+            self.assertEqual(db.get(models.FactoryReelRequest, request_id).status, "pending")
+
+    def test_failed_video_falls_back_to_random_library_video(self):
+        request_id, video_id, chat_id = self.enqueue()
+        with self.Session() as db:
+            db.add(models.Media(factory_id=1, media_type="video", url="https://x.example/lib.mp4"))
+            db.add(models.Media(factory_id=1, media_type="image", url="https://x.example/a.jpg"))
+            db.commit()
+        self.finish(video_id, chat_id, video="failed")
+        reels.finalize_pending(self.Session)
+        with self.Session() as db:
+            request = db.get(models.FactoryReelRequest, request_id)
+            self.assertEqual(request.status, "succeeded")
+            self.assertEqual(db.get(models.Post, request.post_id).media_urls, ["https://x.example/lib.mp4"])
+
+    def test_failed_video_without_library_video_still_fails(self):
+        request_id, video_id, chat_id = self.enqueue()
+        self.finish(video_id, chat_id, video="failed")
+        reels.finalize_pending(self.Session)
+        with self.Session() as db:
+            request = db.get(models.FactoryReelRequest, request_id)
+            self.assertEqual(request.status, "failed")
+            self.assertIn("فشل الفيديو: ffmpeg", request.error)
+
     def test_post_creation_error_closes_request_failed(self):
         request_id, video_id, chat_id = self.enqueue()
         self.finish(video_id, chat_id)

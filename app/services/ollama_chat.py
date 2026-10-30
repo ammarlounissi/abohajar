@@ -63,7 +63,9 @@ GENERATION_OPTIONS = {"temperature": 0.9, "top_p": 0.95, "repeat_penalty": 1.15}
 
 
 def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=120, transport=transport)
+    # مهلة القراءة طويلة: Ollama على المعالج يبطؤ كثيراً أثناء رندر الفيديو في العامل الآخر
+    timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT, connect=15)
+    return httpx.AsyncClient(timeout=timeout, transport=transport)
 
 
 class OllamaUnavailableError(Exception):
@@ -115,9 +117,7 @@ def _conversation_messages(
     ]
 
 
-async def generate_reply(
-    messages: list[dict[str, str]], model: Optional[str] = None,
-) -> str:
+async def _request_reply(messages: list[dict[str, str]], model: Optional[str]) -> str:
     try:
         async with make_client() as client:
             response = await client.post(
@@ -132,11 +132,11 @@ async def generate_reply(
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPError as exc:
-        logger.warning("Ollama request failed: %s", type(exc).__name__)
-        raise OllamaUnavailableError from exc
+        logger.warning("Ollama request failed: %s %s", type(exc).__name__, exc)
+        raise OllamaUnavailableError(type(exc).__name__) from exc
     except ValueError as exc:
         logger.warning("Ollama returned invalid JSON")
-        raise OllamaUnavailableError from exc
+        raise OllamaUnavailableError("InvalidJSON") from exc
 
     if (
         not isinstance(payload, dict)
@@ -145,8 +145,23 @@ async def generate_reply(
         or not payload["message"]["content"].strip()
     ):
         logger.warning("Ollama response is missing its generated message")
-        raise OllamaUnavailableError
+        raise OllamaUnavailableError("EmptyResponse")
     return payload["message"]["content"]
+
+
+async def generate_reply(
+    messages: list[dict[str, str]], model: Optional[str] = None,
+) -> str:
+    last: Optional[OllamaUnavailableError] = None
+    for attempt in range(1, max(1, settings.OLLAMA_ATTEMPTS) + 1):
+        try:
+            return await _request_reply(messages, model)
+        except OllamaUnavailableError as exc:
+            last = exc
+            if attempt < settings.OLLAMA_ATTEMPTS:
+                logger.info("Retrying Ollama request (attempt %d failed)", attempt)
+                await asyncio.sleep(3)
+    raise last
 
 
 def enqueue_description_job(db: Session, factory_id: int) -> models.FactoryDescriptionJob:
@@ -247,8 +262,9 @@ def process_description_job(
             db.commit()
         logger.info("Factory description job %s completed", job_id)
         return True
-    except OllamaUnavailableError:
-        _fail_description_job(job_id, "تعذر الحصول على وصف صالح من نموذج Ollama", session_factory)
+    except OllamaUnavailableError as exc:
+        detail = f" ({exc})" if str(exc) else ""
+        _fail_description_job(job_id, f"تعذر الحصول على وصف صالح من نموذج Ollama{detail}", session_factory)
         logger.warning("Factory description job %s failed: Ollama returned no usable response", job_id)
         return False
     except Exception:

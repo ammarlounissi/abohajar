@@ -101,9 +101,14 @@ def build_description(factory: models.Factory, text: str) -> str:
     return "\n\n".join(lines)
 
 
-def create_reel_post(db: Session, factory_id: int, video_id: int, chat_id: int) -> models.Post:
+def create_reel_post(
+    db: Session, factory_id: int, video_id: int, chat_id: int, fallback_response: str = None,
+    fallback_video_url: str = None,
+) -> models.Post:
     """video_id: معرّف مهمة توليد الفيديو (factory_video_jobs)، وchat_id: معرّف مهمة الوصف (factory_description_jobs).
-    كلتاهما يجب أن تتبع المصنع وتكون succeeded."""
+    كلتاهما يجب أن تتبع المصنع وتكون succeeded. fallback_response: وصف بديل (من رسائل Ollama السابقة للمصنع)
+    يُستعمل بدل ناتج مهمة الوصف حين فشلت، فلا يُشترط نجاحها.
+    fallback_video_url: رابط فيديو من مكتبة المصنع يُستعمل بدل ناتج مهمة الفيديو حين فشلت (بلا SKU)."""
     factory = get_factory(db, factory_id)
 
     video_job = db.query(models.FactoryVideoJob).filter(
@@ -111,16 +116,24 @@ def create_reel_post(db: Session, factory_id: int, video_id: int, chat_id: int) 
     ).first()
     if video_job is None:
         raise NotFoundError("مهمة توليد الفيديو غير موجودة لهذا المصنع")
-    if video_job.status != "succeeded" or not video_job.video_url:
+    if fallback_video_url is not None:
+        video_url, video_sku = fallback_video_url, None
+    elif video_job.status != "succeeded" or not video_job.video_url:
         raise ConflictError(f"مهمة الفيديو لم تكتمل بعد (الحالة: {video_job.status})")
+    else:
+        video_url, video_sku = video_job.video_url, video_job.sku
 
     chat_job = db.query(models.FactoryDescriptionJob).filter(
         models.FactoryDescriptionJob.id == chat_id, models.FactoryDescriptionJob.factory_id == factory_id,
     ).first()
     if chat_job is None:
         raise NotFoundError("مهمة توليد الوصف غير موجودة لهذا المصنع")
-    if chat_job.status != "succeeded" or not (chat_job.response or "").strip():
+    if fallback_response is not None:
+        raw_description = fallback_response
+    elif chat_job.status != "succeeded" or not (chat_job.response or "").strip():
         raise ConflictError(f"مهمة الوصف لم تكتمل بعد (الحالة: {chat_job.status})")
+    else:
+        raw_description = chat_job.response
 
     channel_ids = post_publisher.active_channel_ids(db, factory_id)
     if not channel_ids:
@@ -129,13 +142,13 @@ def create_reel_post(db: Session, factory_id: int, video_id: int, chat_id: int) 
     post = models.Post(
         factory_id=factory_id,
         media_type="reel",
-        media_urls=[video_job.video_url],
-        description=build_description(factory, chat_job.response),
+        media_urls=[video_url],
+        description=build_description(factory, raw_description),
         status=PostStatus.APPROVED,
         approval=PostApproval.APPROVED,
         approved_at=utc_now(),
         scheduled_at=None,
-        sku=video_job.sku,
+        sku=video_sku,
     )
     post.deliveries = [
         models.PostDelivery(channel_id=channel_id, status=DeliveryStatus.PENDING.value, attempts=0)

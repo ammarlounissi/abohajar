@@ -8,6 +8,7 @@ import logging
 import signal
 import time
 
+from app.core import job_lock
 from app.services import factory_reel_requests, ollama_chat
 
 POLL_INTERVAL_SECONDS = 1.0
@@ -44,13 +45,16 @@ def main(argv=None) -> int:
         logging.warning("Marked %d interrupted description job(s) as failed", recovered)
 
     while not _stop_requested:
-        job_id = ollama_chat.claim_next_description_job()
+        # قفل مشترك مع العامل الآخر: مهمة ثقيلة واحدة فقط في كل لحظة، والأخرى تنتظر دورها في الطابور
+        with job_lock.try_acquire() as acquired:
+            job_id = ollama_chat.claim_next_description_job() if acquired else None
+            if job_id is not None:
+                ollama_chat.process_description_job(job_id)
         if job_id is None:
             if args.once:
                 break
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
-        ollama_chat.process_description_job(job_id)
         _finalize_reel_requests()
         if args.once:
             break

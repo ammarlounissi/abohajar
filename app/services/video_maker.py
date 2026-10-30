@@ -253,6 +253,14 @@ def _encode_args(crf: int, with_audio: bool = False) -> list:
     ]
 
 
+def _lower_priority() -> None:
+    """يخفض أولوية ffmpeg (في العملية الابنة فقط) كي لا يستحوذ على المعالج ويُبطئ Ollama."""
+    try:
+        os.nice(settings.FFMPEG_NICE)
+    except (OSError, AttributeError):
+        pass
+
+
 def _run_ffmpeg(
     ffmpeg: str, images: List[Path], duration: float, fit: str, crf: int, output: Path,
     audio: Optional[Path] = None, template: Optional[VideoTemplate] = None,
@@ -276,7 +284,10 @@ def _run_ffmpeg(
         *maps, "-t", f"{duration:.2f}", *_encode_args(crf, audio is not None), str(output),
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT, check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT, check=False,
+            preexec_fn=_lower_priority,
+        )
     except subprocess.TimeoutExpired as exc:
         raise VideoRenderError("استغرق بناء الفيديو وقتاً أطول من المسموح") from exc
     if result.returncode:
