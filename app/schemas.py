@@ -70,6 +70,7 @@ class FactoryDescriptionJobResponse(BaseModel):
     factory_id: int
     prompt: str
     model: str
+    provider: str
     status: Literal["queued", "running", "succeeded", "failed"]
     response: Optional[str] = None
     error: Optional[str] = None

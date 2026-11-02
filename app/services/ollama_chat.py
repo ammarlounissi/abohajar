@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_TURNS = 5
 SessionFactory = Callable[[], Session]
 SYSTEM_INSTRUCTION = (
-    "أنت كاتب محتوى للمصنع «{factory_name}». اكتب وصفاً تسويقياً عربياً موجزاً يصلح لمنشور "
-    "على مواقع التواصل اعتماداً على نشاط المصنع وسياق المحادثة فقط. لا تخترع أسعاراً أو "
-    "مواصفات أو منتجات غير مذكورة، وأعد نص الوصف فقط دون مقدمة أو شرح."
+    "أنت كاتب محتوى للمصنع «{factory_name}». اكتب وصفاً تسويقياً عربياً فقط، صالحاً لمنشور "
+    "على مواقع التواصل، اعتماداً حصراً على نشاط المصنع وسياق المحادثة. استخدم العربية الفصحى "
+    "السليمة من دون خلط لغات أو كلمات أجنبية (إلا اسم علامة تجارية وارد صراحةً). لا تخترع "
+    "أسعاراً أو مواصفات أو منتجات أو مزايا غير مذكورة، ولا تضف كلمات أو موضوعات لا علاقة لها "
+    "بالحجر الطبيعي وحجر البناء. أعد نص المنشور فقط دون مقدمة أو شرح أو عناوين."
 )
 
 # مصطلحات المجال: تمنع النموذج من ترجمات خاطئة (سجادة، أثاث، سقف...) وتعرّفه أين يُستعمل الحجر.
@@ -62,10 +64,12 @@ AVOID_PREVIOUS_CHARS = 220
 GENERATION_OPTIONS = {"temperature": 0.9, "top_p": 0.95, "repeat_penalty": 1.15}
 
 
-def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.AsyncClient:
+def make_client(
+    transport: Optional[httpx.AsyncBaseTransport] = None, timeout: Optional[int] = None,
+) -> httpx.AsyncClient:
     # مهلة القراءة طويلة: Ollama على المعالج يبطؤ كثيراً أثناء رندر الفيديو في العامل الآخر
-    timeout = httpx.Timeout(settings.OLLAMA_TIMEOUT, connect=15)
-    return httpx.AsyncClient(timeout=timeout, transport=transport)
+    request_timeout = httpx.Timeout(timeout or settings.OLLAMA_TIMEOUT, connect=15)
+    return httpx.AsyncClient(timeout=request_timeout, transport=transport)
 
 
 class OllamaUnavailableError(Exception):
@@ -117,7 +121,7 @@ def _conversation_messages(
     ]
 
 
-async def _request_reply(messages: list[dict[str, str]], model: Optional[str]) -> str:
+async def _request_ollama(messages: list[dict[str, str]], model: Optional[str]) -> str:
     try:
         async with make_client() as client:
             response = await client.post(
@@ -149,13 +153,67 @@ async def _request_reply(messages: list[dict[str, str]], model: Optional[str]) -
     return payload["message"]["content"]
 
 
+async def _request_gemini(messages: list[dict[str, str]], model: Optional[str]) -> str:
+    if not settings.GEMINI_API_KEY:
+        raise OllamaUnavailableError("GEMINI_API_KEY غير مضبوط")
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    contents = [
+        {"role": "model" if m["role"] == "assistant" else "user",
+         "parts": [{"text": m["content"]}]}
+        for m in messages if m["role"] != "system"
+    ]
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model or settings.GEMINI_MODEL}:generateContent"
+    )
+    try:
+        async with make_client(timeout=settings.GEMINI_TIMEOUT) as client:
+            response = await client.post(
+                url,
+                headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                json={
+                    "systemInstruction": {"parts": [{"text": system}]},
+                    "contents": contents,
+                    "generationConfig": {
+                        "temperature": 0.85,
+                        "topP": 0.9,
+                        "maxOutputTokens": 300,
+                    },
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Gemini request failed: %s %s", type(exc).__name__, exc)
+        raise OllamaUnavailableError(type(exc).__name__) from exc
+    except ValueError as exc:
+        logger.warning("Gemini returned invalid JSON")
+        raise OllamaUnavailableError("InvalidJSON") from exc
+    try:
+        text = "".join(
+            part["text"] for part in payload["candidates"][0]["content"]["parts"]
+            if isinstance(part.get("text"), str)
+        ).strip()
+    except (KeyError, IndexError, TypeError):
+        text = ""
+    if not text:
+        logger.warning("Gemini response is missing generated text")
+        raise OllamaUnavailableError("EmptyResponse")
+    return text
+
+
 async def generate_reply(
-    messages: list[dict[str, str]], model: Optional[str] = None,
+    messages: list[dict[str, str]], model: Optional[str] = None, provider: Optional[str] = None,
 ) -> str:
+    selected_provider = (provider or settings.DESCRIPTION_PROVIDER).lower()
+    if selected_provider not in {"ollama", "gemini"}:
+        raise OllamaUnavailableError(f"مزوّد الأوصاف غير مدعوم: {selected_provider}")
     last: Optional[OllamaUnavailableError] = None
     for attempt in range(1, max(1, settings.OLLAMA_ATTEMPTS) + 1):
         try:
-            return await _request_reply(messages, model)
+            if selected_provider == "gemini":
+                return await _request_gemini(messages, model)
+            return await _request_ollama(messages, model)
         except OllamaUnavailableError as exc:
             last = exc
             if attempt < settings.OLLAMA_ATTEMPTS:
@@ -169,6 +227,9 @@ def enqueue_description_job(db: Session, factory_id: int) -> models.FactoryDescr
     prompt = (factory.activity or "").strip()
     if not prompt:
         raise InvalidInputError("نشاط المصنع مطلوب لتوليد الوصف")
+    provider = settings.DESCRIPTION_PROVIDER
+    if provider not in {"ollama", "gemini"}:
+        raise InvalidInputError("DESCRIPTION_PROVIDER يجب أن يكون ollama أو gemini")
 
     history = list(reversed(
         db.query(models.FactoryChatMessage)
@@ -182,7 +243,8 @@ def enqueue_description_job(db: Session, factory_id: int) -> models.FactoryDescr
         factory_id=factory_id,
         prompt=prompt,
         messages=messages,
-        model=settings.OLLAMA_MODEL,
+        model=(settings.GEMINI_MODEL if provider == "gemini" else settings.OLLAMA_MODEL),
+        provider=provider,
         status="queued",
     )
     try:
@@ -239,9 +301,10 @@ def process_description_job(
             return False
         messages = job.messages
         model = job.model
+        provider = job.provider or "ollama"
 
     try:
-        description = asyncio.run(generate_reply(messages, model)).strip()
+        description = asyncio.run(generate_reply(messages, model, provider=provider)).strip()
         if not description:
             raise OllamaUnavailableError("Ollama returned an empty description")
         now = utc_now()
@@ -264,8 +327,9 @@ def process_description_job(
         return True
     except OllamaUnavailableError as exc:
         detail = f" ({exc})" if str(exc) else ""
-        _fail_description_job(job_id, f"تعذر الحصول على وصف صالح من نموذج Ollama{detail}", session_factory)
-        logger.warning("Factory description job %s failed: Ollama returned no usable response", job_id)
+        provider_label = "Ollama" if provider == "ollama" else "Gemini"
+        _fail_description_job(job_id, f"تعذر الحصول على وصف صالح من نموذج {provider_label}{detail}", session_factory)
+        logger.warning("Factory description job %s failed: %s returned no usable response", job_id, provider)
         return False
     except Exception:
         logger.exception("Factory description job %s failed unexpectedly", job_id)

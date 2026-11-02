@@ -102,7 +102,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ### عمال المهام الخلفية
 
-توليد أوصاف Ollama والفيديوهات يعمل كعمال مستقلين، لا داخل طلب HTTP. بعد نشر الكود طبّق الترحيلات، وثبّت خدمة العامل المناسبة (عدّل مسار المشروع والبيئة الافتراضية واسم المستخدم في ملفات الوحدات إذا اختلفت إعدادات الخادم):
+توليد أوصاف Ollama أو Gemini والفيديوهات يعمل كعمال مستقلين، لا داخل طلب HTTP. بعد نشر الكود طبّق الترحيلات، وثبّت خدمة العامل المناسبة (عدّل مسار المشروع والبيئة الافتراضية واسم المستخدم في ملفات الوحدات إذا اختلفت إعدادات الخادم):
 
 ```bash
 alembic upgrade head
@@ -115,7 +115,7 @@ sudo systemctl status hadjret-description-worker
 sudo journalctl -u hadjret-description-worker -f
 ```
 
-المسار `POST /api/chat/` يستقبل `{"factory_id":1}` فقط ويرجع `202 Accepted` مع `id` و`status_url` فور حفظ المهمة. تابع الحالة بواسطة `GET /api/chat/{factory_id}/jobs/{job_id}`؛ عند `succeeded` يوجد الوصف في `response`، وعند `failed` يظهر السبب في `error`. بعد نجاح المهمة فقط يُحفظ السؤال والجواب في `factory_chat_messages` ليُستخدم الجواب لاحقاً كوصف منشور. جدول `factory_description_jobs` خاص بحالة الطابور وبياناته التشغيلية، وليس جدولاً آخر للأوصاف. شغّل نسخة واحدة من عامل الأوصاف لهذه القاعدة، وراقب سجلاته عبر:
+المسار `POST /api/chat/` يستقبل `{"factory_id":1}` فقط ويرجع `202 Accepted` مع `id` و`status_url`. تابع الحالة بواسطة `GET /api/chat/{factory_id}/jobs/{job_id}`؛ عند `succeeded` يوجد الوصف في `response`، وعند `failed` يظهر السبب في `error`. بعد نجاح المهمة فقط يُحفظ السؤال والجواب في `factory_chat_messages` ليُستخدم الجواب لاحقاً كوصف منشور. يختار `DESCRIPTION_PROVIDER` المزود (`ollama` افتراضياً أو `gemini`) وتُحفظ قيمة المزود مع كل مهمة لضمان تنفيذ الطابور على المزود الذي أنشأها. لتفعيل Gemini اضبط `DESCRIPTION_PROVIDER=gemini` و`GEMINI_API_KEY` بمفتاح Google AI Studio، ويمكن تغيير `GEMINI_MODEL` و`GEMINI_TIMEOUT`. لا يُرسل مفتاح Gemini إلى العميل؛ يتصل به عامل الوصف مباشرة. تعليمات التوليد تشترط العربية فقط وتمنع اختراع معلومات أو إدخال مصطلحات لا تخص الحجر، وتضمّن الأوصاف السابقة كأمثلة للتجنب لتقليل التكرار. بعد تغيير الإعدادات أعد تشغيل العامل. شغّل نسخة واحدة من عامل الأوصاف لهذه القاعدة، وراقب سجلاته عبر:
 
 ```bash
 sudo journalctl -u hadjret-description-worker -f
@@ -169,12 +169,12 @@ curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: applicat
 curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"channel":"telegram","identifier":"123456789"}'
 
-# توليد وصف Ollama اعتماداً على نشاط المصنع وآخر خمسة تبادلات محفوظة.
+# توليد وصف عبر المزود المحدد في DESCRIPTION_PROVIDER (Ollama أو Gemini).
 curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"factory_id":1}'
 ```
 
-يقبل المسار `POST /api/chat/` بارامتراً واحداً فقط في جسم الطلب هو `factory_id`. يستخدم محتوى `factories.activity` كطلب للمساعد، مع بيانات المصنع وآخر خمسة تبادلات سؤال/جواب محفوظة كسياق. يحفظ التبادل في جدول `factory_chat_messages` الموجود: نص النشاط في `prompt` والوصف الناتج في `response`، ليُستخدم لاحقاً عند إنشاء المنشور. لا يُنشأ منشور ولا يحدث نشر في هذه المرحلة، ولا يحتاج هذا التغيير إلى جدول أو ترحيل جديد. أضف نشاط المصنع أو حدّثه عبر `POST/PATCH /api/factories/`. يستخدم المسار `OLLAMA_BASE_URL` (افتراضياً `http://localhost:11434`) و`OLLAMA_MODEL` (افتراضياً `qwen2.5:3b`). إذا كان نشاط المصنع فارغاً يرجع `422`، وإذا تعذر الاتصال أو لم يرجع Ollama وصفاً صالحاً يرجع `502`.
+يقبل المسار `POST /api/chat/` بارامتراً واحداً فقط في جسم الطلب هو `factory_id`. يستخدم محتوى `factories.activity` كطلب للمساعد، مع بيانات المصنع وآخر خمسة أوصاف محفوظة كسياق للتنويع. يحفظ التبادل في جدول `factory_chat_messages` الموجود: نص النشاط في `prompt` والوصف الناتج في `response`، ليُستخدم لاحقاً عند إنشاء المنشور. لا يُنشأ منشور ولا يحدث نشر في هذه المرحلة. استخدم `DESCRIPTION_PROVIDER=ollama` مع `OLLAMA_BASE_URL` و`OLLAMA_MODEL`، أو `DESCRIPTION_PROVIDER=gemini` مع `GEMINI_API_KEY` و`GEMINI_MODEL` (الافتراضي `gemini-2.5-flash`). يُطلب من المزود كتابة عربية فقط والالتزام بمعلومات الحجر والنشاط دون اختلاق. لا تضع مفتاح Gemini في الواجهة أو مستودع Git؛ خزّنه في `.env` على خادم Ubuntu. عند التفعيل شغّل `alembic upgrade head` لتطبيق ترحيل حفظ المزود ثم أعد تشغيل خدمة العامل. إذا كان نشاط المصنع فارغاً يرجع `422`، وإذا تعذر الاتصال أو لم يرجع المزود وصفاً صالحاً تظهر المهمة بحالة `failed` ورسالة خطأ في `error`.
 
 ### مكتبة وسائط المصنع
 

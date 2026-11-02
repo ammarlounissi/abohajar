@@ -1,4 +1,4 @@
-"""Persistent worker for Ollama factory description generation.
+"""Persistent worker for Ollama/Gemini factory description generation.
 
     python -m app.jobs.generate_factory_descriptions
     python -m app.jobs.generate_factory_descriptions --once
@@ -29,7 +29,7 @@ def _finalize_reel_requests() -> None:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="عامل توليد أوصاف المصانع عبر Ollama")
+    parser = argparse.ArgumentParser(description="عامل توليد أوصاف المصانع عبر Ollama أو Gemini")
     parser.add_argument("--once", action="store_true", help="عالج مهمة واحدة ثم انتهِ")
     args = parser.parse_args(argv)
 

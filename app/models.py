@@ -130,6 +130,7 @@ class FactoryDescriptionJob(Base):
     prompt = Column(Text, nullable=False)
     messages = Column(JSON, nullable=False)
     model = Column(String(100), nullable=False)
+    provider = Column(String(20), nullable=False, default="ollama", server_default="ollama")
     status = Column(String(20), nullable=False, default="queued", index=True)
     response = Column(Text, nullable=True)
     error = Column(Text, nullable=True)

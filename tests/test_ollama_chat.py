@@ -83,6 +83,7 @@ class OllamaChatRouterTests(unittest.TestCase):
             (body["factory_id"], body["prompt"], body["response"], body["status"]),
             (1, "صناعة الحجر الطبيعي", "مرحباً بك", "succeeded"),
         )
+        self.assertEqual(body["provider"], "ollama")
         self.assertIn("id", body)
         self.assertIn("created_at", body)
         messages, model = generate.await_args.args
@@ -283,6 +284,37 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
                 "options": ollama_chat.GENERATION_OPTIONS,
             },
         )
+
+    async def test_gemini_request_uses_system_instruction_and_api_key_header(self):
+        captured = {}
+
+        def respond(request):
+            captured["url"] = str(request.url)
+            captured["headers"] = request.headers
+            captured["payload"] = json.loads(request.read())
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": [{"text": "وصف عربي للحجر"}]}}],
+            })
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        with (
+            mock.patch("app.services.ollama_chat.make_client", return_value=client),
+            mock.patch.object(settings, "GEMINI_API_KEY", "test-secret"),
+            mock.patch.object(settings, "GEMINI_MODEL", "gemini-test"),
+        ):
+            result = await ollama_chat.generate_reply([
+                {"role": "system", "content": "اكتب بالعربية"},
+                {"role": "user", "content": "نشاط الحجر الطبيعي"},
+            ], provider="gemini")
+
+        self.assertEqual(result, "وصف عربي للحجر")
+        self.assertEqual(
+            captured["url"],
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent",
+        )
+        self.assertEqual(captured["headers"]["x-goog-api-key"], "test-secret")
+        self.assertEqual(captured["payload"]["systemInstruction"]["parts"][0]["text"], "اكتب بالعربية")
+        self.assertEqual(captured["payload"]["contents"][0]["parts"][0]["text"], "نشاط الحجر الطبيعي")
 
 if __name__ == "__main__":
     unittest.main()
