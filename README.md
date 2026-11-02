@@ -115,7 +115,7 @@ sudo systemctl status hadjret-description-worker
 sudo journalctl -u hadjret-description-worker -f
 ```
 
-المسار `POST /api/chat/` يستقبل `{"factory_id":1}` فقط ويرجع `202 Accepted` مع `id` و`status_url`. تابع الحالة بواسطة `GET /api/chat/{factory_id}/jobs/{job_id}`؛ عند `succeeded` يوجد الوصف في `response`، وعند `failed` يظهر السبب في `error`. بعد نجاح المهمة فقط يُحفظ السؤال والجواب في `factory_chat_messages` ليُستخدم الجواب لاحقاً كوصف منشور. يختار `DESCRIPTION_PROVIDER` المزود (`ollama` افتراضياً أو `gemini`) وتُحفظ قيمة المزود مع كل مهمة لضمان تنفيذ الطابور على المزود الذي أنشأها. لتفعيل Gemini اضبط `DESCRIPTION_PROVIDER=gemini` و`GEMINI_API_KEY` بمفتاح Google AI Studio، ويمكن تغيير `GEMINI_MODEL` و`GEMINI_TIMEOUT`. لا يُرسل مفتاح Gemini إلى العميل؛ يتصل به عامل الوصف مباشرة. تعليمات التوليد تشترط العربية فقط وتمنع اختراع معلومات أو إدخال مصطلحات لا تخص الحجر، وتضمّن الأوصاف السابقة كأمثلة للتجنب لتقليل التكرار. بعد تغيير الإعدادات أعد تشغيل العامل. شغّل نسخة واحدة من عامل الأوصاف لهذه القاعدة، وراقب سجلاته عبر:
+المسار `POST /api/ai-chat/` يتطلب `factory_id` و`model` في الجسم، ويرجع `202 Accepted` مع `id` و`status_url`. تابع الحالة بواسطة `GET /api/ai-chat/{factory_id}/jobs/{job_id}`؛ عند `succeeded` يوجد الوصف في `response`، وعند `failed` تظهر رسالة واضحة في `error`. بعد نجاح المهمة فقط يُحفظ السؤال والجواب في `factory_chat_messages`. اختيار النموذج إلزامي في كل طلب ولا توجد قيمة افتراضية؛ الاسم الذي يبدأ بـ `gemini-` يوجّه الطلب إلى Gemini، وأي اسم نموذج آخر يوجّه إلى Ollama. لذلك لا تستخدم `DESCRIPTION_PROVIDER` أو `OLLAMA_MODEL` أو `GEMINI_MODEL` في `.env`. خزّن `GEMINI_API_KEY` و`GEMINI_TIMEOUT` فقط على الخادم، ولا ترسل المفتاح إلى العميل. يتضمن خطأ Gemini رمز HTTP ورسالة الخطأ القادمة من Google (مع إخفاء المفتاح)، وتظهر تفاصيله في `error` عند فشل المهمة. تعليمات التوليد تشترط العربية فقط وتمنع اختراع معلومات أو إدخال مصطلحات لا تخص الحجر، وتضمّن الأوصاف السابقة للتقليل من التكرار. شغّل نسخة واحدة من عامل الأوصاف لهذه القاعدة، وراقب سجلاته عبر:
 
 ```bash
 sudo journalctl -u hadjret-description-worker -f
@@ -169,12 +169,12 @@ curl -X POST $API/api/factories/ -H "X-API-Key: $KEY" -H "Content-Type: applicat
 curl -X POST $API/api/factories/1/contacts -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"channel":"telegram","identifier":"123456789"}'
 
-# توليد وصف عبر المزود المحدد في DESCRIPTION_PROVIDER (Ollama أو Gemini).
-curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"factory_id":1}'
+# اسم النموذج إلزامي. gemini-* يستخدم Gemini؛ اسم آخر يختار نموذج Ollama المحدد.
+curl -X POST $API/api/ai-chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"factory_id":1,"model":"gemini-2.5-flash"}'
 ```
 
-يقبل المسار `POST /api/chat/` بارامتراً واحداً فقط في جسم الطلب هو `factory_id`. يستخدم محتوى `factories.activity` كطلب للمساعد، مع بيانات المصنع وآخر خمسة أوصاف محفوظة كسياق للتنويع. يحفظ التبادل في جدول `factory_chat_messages` الموجود: نص النشاط في `prompt` والوصف الناتج في `response`، ليُستخدم لاحقاً عند إنشاء المنشور. لا يُنشأ منشور ولا يحدث نشر في هذه المرحلة. استخدم `DESCRIPTION_PROVIDER=ollama` مع `OLLAMA_BASE_URL` و`OLLAMA_MODEL`، أو `DESCRIPTION_PROVIDER=gemini` مع `GEMINI_API_KEY` و`GEMINI_MODEL` (الافتراضي `gemini-2.5-flash`). يُطلب من المزود كتابة عربية فقط والالتزام بمعلومات الحجر والنشاط دون اختلاق. لا تضع مفتاح Gemini في الواجهة أو مستودع Git؛ خزّنه في `.env` على خادم Ubuntu. عند التفعيل شغّل `alembic upgrade head` لتطبيق ترحيل حفظ المزود ثم أعد تشغيل خدمة العامل. إذا كان نشاط المصنع فارغاً يرجع `422`، وإذا تعذر الاتصال أو لم يرجع المزود وصفاً صالحاً تظهر المهمة بحالة `failed` ورسالة خطأ في `error`.
+يقبل المسار `POST /api/ai-chat/` حقلي `factory_id` و`model` معاً، وكلاهما مطلوب. مثال نموذج Gemini: `gemini-2.5-flash`، ومثال Ollama: `qwen2.5:3b`. يستعمل الخادم بادئة اسم النموذج لاختيار المزود؛ لا يوجد Ollama افتراضي أو إعداد نموذج عام. يستخدم النظام `factories.activity` كطلب للمساعد، مع بيانات المصنع وآخر خمسة أوصاف محفوظة كسياق للتنويع، ويحفظ الناتج في `factory_chat_messages`. لا يُنشأ منشور ولا يحدث نشر في هذه المرحلة. خزّن `GEMINI_API_KEY` في `.env` على خادم Ubuntu فقط، ولا تضعه في الواجهة أو مستودع Git. شغّل `alembic upgrade head` لترحيل حفظ المزود مع المهمة ثم أعد تشغيل العامل. عند تعذر الاتصال بـ Gemini، أو ردّ Google بخطأ، تظهر المهمة `failed` مع رسالة تتضمن الحالة وسبب الرفض في `error` على رابط الحالة.
 
 ### مكتبة وسائط المصنع
 
@@ -190,7 +190,7 @@ curl -X POST $API/api/chat/ -H "X-API-Key: $KEY" -H "Content-Type: application/j
 | `POST /api/factories/{factory_id}/videos/generate` | وضع طلب التوليد في الطابور؛ يرجع `202 Accepted` ومعرّف المهمة |
 | `POST /api/factories/{factory_id}/videos/generate-random` | مسار الأتمتة دون جسم طلب: صور المكتبة + صوت وقالب عشوائيان + مدة 30 ثانية |
 | `GET /api/factories/{factory_id}/videos/jobs/{job_id}` | حالة المهمة ونتيجتها أو رسالة الفشل |
-| `POST /api/factories/{factory_id}/reel-post` | **ريل جاهز للنشر بمعرّف المصنع فقط**: يضع في الطابور فيديو مكتبة عشوائياً (30 ثانية) ووصف Ollama، ويرجع `202` مع `id` و`video_job_id` و`chat_job_id` و`status_url`. يشترط نشاطاً للمصنع، وصور مكتبة وملفات صوت، وقناة نشر مفعّلة واحدة على الأقل |
+| `POST /api/factories/{factory_id}/reel-post` | **ريل جاهز للنشر**: يتطلب `{"model":"gemini-2.5-flash"}` أو اسم نموذج Ollama صريحاً في الجسم، ثم يضع الفيديو والوصف في الطابور ويرجع معرفات المهام ورابط الحالة |
 | `GET /api/factories/{factory_id}/reel-post/{id}` | حالة الطلب: `pending` ← `succeeded` (ويظهر `post_id` للمنشور المعتمد) أو `failed` (والسبب في `error`) |
 
 مثال جسم طلب التوليد:

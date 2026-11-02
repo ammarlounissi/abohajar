@@ -37,8 +37,7 @@ def create_post(post: schemas.PostCreate, db: Session = Depends(get_db)):
 
 @router.post("/from-factory-video", response_model=schemas.PostResponse, status_code=status.HTTP_201_CREATED)
 def create_reel_post_from_factory_video(request: schemas.FactoryReelPostRequest, db: Session = Depends(get_db)):
-    """ريل معتمد بثلاثة معرّفات: factory_id وvideo_id (مهمة الفيديو) وchat_id (مهمة وصف Ollama).
-    الوسائط من رابط الفيديو، والوصف = رد Ollama + هاتف المصنع + وسوم مقترحة، والقنوات = قنوات المصنع المفعّلة."""
+    """ريل معتمد بمعرّفات المصنع والفيديو ومهمة الوصف، مع الوصف الناتج عن النموذج المختار."""
     return factory_reel_posts.create_reel_post(db, request.factory_id, request.video_id, request.chat_id)
 
 

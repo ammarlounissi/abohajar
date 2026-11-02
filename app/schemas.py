@@ -51,8 +51,25 @@ class FactoryResponse(FactoryBase):
     is_active: bool
 
 
-class FactoryChatRequest(BaseModel):
+class AIModelSelection(BaseModel):
+    model: str = Field(min_length=1, max_length=100, pattern=r"^(?:models/)?[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_model(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if value.startswith("models/"):
+                value = value[len("models/"):]
+        return value
+
+
+class FactoryChatRequest(AIModelSelection):
     factory_id: int = Field(gt=0)
+    model_config = ConfigDict(extra="forbid")
+
+
+class FactoryReelModelRequest(AIModelSelection):
     model_config = ConfigDict(extra="forbid")
 
 

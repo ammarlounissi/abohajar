@@ -1,4 +1,4 @@
-"""إنشاء منشور ريل معتمد لمصنع من ناتج مهمتين منتهيتين: مهمة فيديو ومهمة وصف (Ollama).
+"""إنشاء منشور ريل معتمد لمصنع من ناتج مهمتين منتهيتين: مهمة فيديو ومهمة وصف بالذكاء الاصطناعي.
 
 المنشور يُنشأ approved جاهزاً لمؤقت النشر، بلا موعد (scheduled_at=None) فيلتقطه المؤقت فور إنشائه، وقنواته
 هي كل قنوات المصنع المفعّلة. لا شبكة هنا ولا HTTP: دالة واحدة تنفّذ commit بنفسها (اتفاقية الخدمات)."""
@@ -90,10 +90,10 @@ def suggested_hashtags(factory: models.Factory, description: str, model_tags: Li
 
 
 def build_description(factory: models.Factory, text: str) -> str:
-    """رد Ollama (بعد فك JSON وحذف الرموز الزائدة) + رقم هاتف المصنع + وسوم مقترحة."""
+    """نص النموذج (بعد فك JSON وحذف الرموز الزائدة) + رقم هاتف المصنع + وسوم مقترحة."""
     body, model_tags = extract_description(text)
     if not body:
-        raise InvalidInputError("رد Ollama لا يحتوي نص وصف صالحاً")
+        raise InvalidInputError("رد نموذج الذكاء الاصطناعي لا يحتوي نص وصف صالحاً")
     lines = [body, f"📲 للطلب أو الاستفسار عبر واتساب: {factory.phone_number}"]
     tags = suggested_hashtags(factory, body, model_tags)
     if tags:
@@ -106,7 +106,7 @@ def create_reel_post(
     fallback_video_url: str = None,
 ) -> models.Post:
     """video_id: معرّف مهمة توليد الفيديو (factory_video_jobs)، وchat_id: معرّف مهمة الوصف (factory_description_jobs).
-    كلتاهما يجب أن تتبع المصنع وتكون succeeded. fallback_response: وصف بديل (من رسائل Ollama السابقة للمصنع)
+    كلتاهما يجب أن تتبع المصنع وتكون succeeded. fallback_response: وصف بديل من الأوصاف السابقة للمصنع
     يُستعمل بدل ناتج مهمة الوصف حين فشلت، فلا يُشترط نجاحها.
     fallback_video_url: رابط فيديو من مكتبة المصنع يُستعمل بدل ناتج مهمة الفيديو حين فشلت (بلا SKU)."""
     factory = get_factory(db, factory_id)

@@ -39,7 +39,7 @@ class ReelRequestCase(unittest.TestCase):
 
     def enqueue(self, factory_id=1):
         with self.Session() as db:
-            request = reels.enqueue_reel_request(db, factory_id)
+            request = reels.enqueue_reel_request(db, factory_id, "qwen2.5:3b")
             return request.id, request.video_job_id, request.chat_job_id
 
     def finish(self, video_id, chat_id, video="succeeded", chat="succeeded"):
@@ -65,7 +65,7 @@ class EnqueueTests(ReelRequestCase):
     def test_factory_without_activity_creates_no_jobs(self):
         with self.Session() as db:
             with self.assertRaises(errors.InvalidInputError):
-                reels.enqueue_reel_request(db, 2)
+                reels.enqueue_reel_request(db, 2, "qwen2.5:3b")
             self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
             self.assertEqual(db.query(models.FactoryDescriptionJob).count(), 0)
 
@@ -74,13 +74,13 @@ class EnqueueTests(ReelRequestCase):
             db.query(models.SocialChannel).update({"is_active": False})
             db.commit()
             with self.assertRaises(errors.InvalidInputError):
-                reels.enqueue_reel_request(db, 1)
+                reels.enqueue_reel_request(db, 1, "qwen2.5:3b")
             self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
 
     def test_unknown_factory(self):
         with self.Session() as db:
             with self.assertRaises(errors.NotFoundError):
-                reels.enqueue_reel_request(db, 99)
+                reels.enqueue_reel_request(db, 99, "qwen2.5:3b")
 
 
 class FinalizeTests(ReelRequestCase):

@@ -48,8 +48,8 @@ class OllamaChatRouterTests(unittest.TestCase):
     def request(self, factory_id=1, key="test-admin-key", payload=None):
         headers = {"X-API-Key": key} if key is not None else {}
         return self.client.post(
-            "/api/chat/",
-            json=payload if payload is not None else {"factory_id": factory_id},
+            "/api/ai-chat/",
+            json=payload if payload is not None else {"factory_id": factory_id, "model": "qwen2.5:3b"},
             headers=headers,
         )
 
@@ -87,7 +87,7 @@ class OllamaChatRouterTests(unittest.TestCase):
         self.assertIn("id", body)
         self.assertIn("created_at", body)
         messages, model = generate.await_args.args
-        self.assertEqual(model, settings.OLLAMA_MODEL)
+        self.assertEqual(model, "qwen2.5:3b")
         self.assertEqual([m["role"] for m in messages], ["system", "user"])
         self.assertEqual(messages[1]["content"], "صناعة الحجر الطبيعي")
         self.assertTrue(messages[0]["content"].startswith(
@@ -147,6 +147,16 @@ class OllamaChatRouterTests(unittest.TestCase):
             422,
         )
 
+    def test_model_is_required_in_request(self):
+        self.assertEqual(self.request(payload={"factory_id": 1}).status_code, 422)
+
+    def test_model_in_request_selects_and_persists_gemini(self):
+        response = self.request(payload={"factory_id": 1, "model": "gemini-2.5-flash"})
+        self.assertEqual(response.status_code, 202, response.text)
+        with self.Session() as db:
+            job = db.get(models.FactoryDescriptionJob, response.json()["id"])
+            self.assertEqual((job.model, job.provider), ("gemini-2.5-flash", "gemini"))
+
     def test_empty_factory_activity_is_rejected(self):
         with self.Session() as db:
             db.query(models.Factory).filter_by(id=1).update({"activity": "  "})
@@ -183,7 +193,7 @@ class OllamaChatRouterTests(unittest.TestCase):
         )
         self.assertEqual(
             self.client.get(
-                f"/api/chat/2/jobs/{body['id']}", headers={"X-API-Key": "test-admin-key"},
+                f"/api/ai-chat/2/jobs/{body['id']}", headers={"X-API-Key": "test-admin-key"},
             ).status_code,
             404,
         )
@@ -263,12 +273,11 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch("app.services.ollama_chat.make_client", return_value=client),
             mock.patch.object(settings, "OLLAMA_BASE_URL", "http://localhost:11434"),
-            mock.patch.object(settings, "OLLAMA_MODEL", "qwen2.5:3b"),
         ):
             result = await ollama_chat.generate_reply([
                 {"role": "system", "content": "تعليمات"},
                 {"role": "user", "content": "اكتب وصفاً"},
-            ])
+            ], model="qwen2.5:3b")
 
         self.assertEqual(result, "نص مولّد")
         self.assertEqual(captured["url"], "http://localhost:11434/api/chat")
@@ -300,12 +309,11 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch("app.services.ollama_chat.make_client", return_value=client),
             mock.patch.object(settings, "GEMINI_API_KEY", "test-secret"),
-            mock.patch.object(settings, "GEMINI_MODEL", "gemini-test"),
         ):
             result = await ollama_chat.generate_reply([
                 {"role": "system", "content": "اكتب بالعربية"},
                 {"role": "user", "content": "نشاط الحجر الطبيعي"},
-            ], provider="gemini")
+            ], model="gemini-test")
 
         self.assertEqual(result, "وصف عربي للحجر")
         self.assertEqual(
@@ -315,6 +323,27 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["headers"]["x-goog-api-key"], "test-secret")
         self.assertEqual(captured["payload"]["systemInstruction"]["parts"][0]["text"], "اكتب بالعربية")
         self.assertEqual(captured["payload"]["contents"][0]["parts"][0]["text"], "نشاط الحجر الطبيعي")
+
+    async def test_gemini_http_error_is_descriptive_and_redacts_api_key(self):
+        def reject(_request):
+            return httpx.Response(403, json={"error": {
+                "status": "PERMISSION_DENIED", "message": "The API key is invalid"
+            }})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(reject))
+        with (
+            mock.patch("app.services.ollama_chat.make_client", return_value=client),
+            mock.patch.object(settings, "GEMINI_API_KEY", "do-not-leak"),
+            mock.patch.object(settings, "OLLAMA_ATTEMPTS", 1),
+        ):
+            with self.assertRaises(ollama_chat.OllamaUnavailableError) as caught:
+                await ollama_chat.generate_reply([
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "user"},
+                ], model="gemini-2.5-flash")
+        self.assertIn("Gemini أعاد HTTP 403", str(caught.exception))
+        self.assertIn("PERMISSION_DENIED", str(caught.exception))
+        self.assertNotIn("do-not-leak", str(caught.exception))
 
 if __name__ == "__main__":
     unittest.main()

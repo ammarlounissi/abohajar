@@ -1,4 +1,4 @@
-"""ريل كامل بمعرّف المصنع فقط: يطلب فيديو المكتبة العشوائي + وصف Ollama معاً، وعند نجاحهما ينشئ المنشور المعتمد.
+"""ريل كامل: يطلب فيديو المكتبة العشوائي + وصف النموذج الذي حدده المستدعي، وعند نجاحهما ينشئ المنشور المعتمد.
 
 المهمتان تنفذهما عاملتان خلفيتان منفصلتان، لذلك لا ينتظر الطلب بل يسجَّل في factory_reel_requests ويُنهى لاحقاً:
 - العاملتان تستدعيان finalize_pending() بعد كل مهمة (فيكتمل الطلب دون أي متابعة).
@@ -21,15 +21,15 @@ logger = logging.getLogger(__name__)
 SessionFactory = Callable[[], Session]
 
 
-def enqueue_reel_request(db: Session, factory_id: int) -> models.FactoryReelRequest:
+def enqueue_reel_request(db: Session, factory_id: int, model: str) -> models.FactoryReelRequest:
     factory = get_factory(db, factory_id)
-    # فحوص سريعة قبل إنشاء أي مهمة كي لا تبقى مهمة يتيمة تستهلك Ollama أو ffmpeg بلا فائدة
+    # فحوص سريعة قبل إنشاء أي مهمة كي لا تبقى مهمة يتيمة تستهلك مزود الذكاء الاصطناعي أو ffmpeg.
     if not (factory.activity or "").strip():
         raise InvalidInputError("نشاط المصنع مطلوب لتوليد الوصف")
     if not post_publisher.active_channel_ids(db, factory_id):
         raise InvalidInputError("لا توجد قنوات نشر مفعّلة مرتبطة بهذا المصنع")
     video_job = factory_video_jobs.enqueue_automated_library_video(db, factory_id)   # يفحص الصور والصوت
-    chat_job = ollama_chat.enqueue_description_job(db, factory_id)
+    chat_job = ollama_chat.enqueue_description_job(db, factory_id, model)
     request = models.FactoryReelRequest(
         factory_id=factory_id, video_job_id=video_job.id, chat_job_id=chat_job.id, status="pending",
     )

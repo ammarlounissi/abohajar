@@ -185,10 +185,11 @@ def get_factory_video_job(factory_id: int, job_id: int, db: Session = Depends(ge
     response_model=schemas.FactoryReelRequestAccepted,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def create_factory_reel_post(factory_id: int, db: Session = Depends(get_db)):
-    """بمعرّف المصنع فقط: يضع في الطابور فيديو مكتبة عشوائياً ووصف Ollama، وعند اكتمالهما ينشئ
-    منشور ريل معتمداً جاهزاً للنشر (الوسائط + الكابشن + قنوات المصنع). تابعه بمسار الحالة."""
-    request = factory_reel_requests.enqueue_reel_request(db, factory_id)
+def create_factory_reel_post(
+    factory_id: int, selection: schemas.FactoryReelModelRequest, db: Session = Depends(get_db),
+):
+    """يضع فيديو مكتبة عشوائياً ووصفاً باستخدام النموذج المحدد؛ ثم ينشئ المنشور عند اكتمالهما."""
+    request = factory_reel_requests.enqueue_reel_request(db, factory_id, selection.model)
     return schemas.FactoryReelRequestAccepted(
         id=request.id, factory_id=factory_id, video_job_id=request.video_job_id,
         chat_job_id=request.chat_job_id, status="pending",

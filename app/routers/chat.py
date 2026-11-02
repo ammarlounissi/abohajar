@@ -8,8 +8,8 @@ from app.services import ollama_chat
 from app.services.errors import InvalidInputError, NotFoundError
 
 router = APIRouter(
-    prefix="/api/chat",
-    tags=["ollama-chat"],
+    prefix="/api/ai-chat",
+    tags=["ai-chat"],
     dependencies=[Depends(require_admin)],
 )
 
@@ -21,7 +21,7 @@ router = APIRouter(
 )
 def chat(request: schemas.FactoryChatRequest, db: Session = Depends(get_db)):
     try:
-        job = ollama_chat.enqueue_description_job(db, request.factory_id)
+        job = ollama_chat.enqueue_description_job(db, request.factory_id, request.model)
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except InvalidInputError as exc:
@@ -30,7 +30,7 @@ def chat(request: schemas.FactoryChatRequest, db: Session = Depends(get_db)):
         id=job.id,
         factory_id=job.factory_id,
         status="queued",
-        status_url=f"/api/chat/{job.factory_id}/jobs/{job.id}",
+        status_url=f"/api/ai-chat/{job.factory_id}/jobs/{job.id}",
     )
 
 

@@ -121,13 +121,20 @@ def _conversation_messages(
     ]
 
 
-async def _request_ollama(messages: list[dict[str, str]], model: Optional[str]) -> str:
+def _selected_provider(model: str) -> str:
+    model = model.removeprefix("models/").strip()
+    if not model:
+        raise OllamaUnavailableError("يجب تحديد اسم النموذج في الطلب")
+    return "gemini" if model.lower().startswith("gemini-") else "ollama"
+
+
+async def _request_ollama(messages: list[dict[str, str]], model: str) -> str:
     try:
         async with make_client() as client:
             response = await client.post(
                 f"{settings.OLLAMA_BASE_URL}/api/chat",
                 json={
-                    "model": model or settings.OLLAMA_MODEL,
+                    "model": model,
                     "messages": messages,
                     "stream": False,
                     "options": GENERATION_OPTIONS,
@@ -153,7 +160,7 @@ async def _request_ollama(messages: list[dict[str, str]], model: Optional[str]) 
     return payload["message"]["content"]
 
 
-async def _request_gemini(messages: list[dict[str, str]], model: Optional[str]) -> str:
+async def _request_gemini(messages: list[dict[str, str]], model: str) -> str:
     if not settings.GEMINI_API_KEY:
         raise OllamaUnavailableError("GEMINI_API_KEY غير مضبوط")
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -164,7 +171,7 @@ async def _request_gemini(messages: list[dict[str, str]], model: Optional[str]) 
     ]
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model or settings.GEMINI_MODEL}:generateContent"
+        f"{model.removeprefix('models/')}:generateContent"
     )
     try:
         async with make_client(timeout=settings.GEMINI_TIMEOUT) as client:
@@ -183,9 +190,32 @@ async def _request_gemini(messages: list[dict[str, str]], model: Optional[str]) 
             )
             response.raise_for_status()
             payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        try:
+            error_body = exc.response.json().get("error", {})
+            error_status = error_body.get("status")
+            error_message = error_body.get("message")
+            reason = ": ".join(str(item) for item in (error_status, error_message) if item)
+            reason = reason or "رفضت الخدمة الطلب"
+            reason = str(reason).replace(settings.GEMINI_API_KEY, "[مخفي]")[:500]
+        except (ValueError, AttributeError, TypeError):
+            reason = (exc.response.text or "رفضت الخدمة الطلب")
+            if settings.GEMINI_API_KEY:
+                reason = reason.replace(settings.GEMINI_API_KEY, "[مخفي]")
+            reason = reason[:300]
+        detail = f"Gemini أعاد HTTP {exc.response.status_code}: {reason}"
+        logger.warning("Gemini request failed with HTTP %s", exc.response.status_code)
+        raise OllamaUnavailableError(detail) from exc
+    except httpx.TimeoutException as exc:
+        detail = f"انتهت مهلة الاتصال بـ Gemini بعد {settings.GEMINI_TIMEOUT} ثانية"
+        logger.warning("Gemini request timed out")
+        raise OllamaUnavailableError(detail) from exc
+    except httpx.ConnectError as exc:
+        logger.warning("Could not connect to Gemini: %s", type(exc).__name__)
+        raise OllamaUnavailableError("تعذر الاتصال بخدمة Gemini؛ تحقق من اتصال الخادم بالإنترنت") from exc
     except httpx.HTTPError as exc:
-        logger.warning("Gemini request failed: %s %s", type(exc).__name__, exc)
-        raise OllamaUnavailableError(type(exc).__name__) from exc
+        logger.warning("Gemini request failed: %s", type(exc).__name__)
+        raise OllamaUnavailableError(f"فشل طلب Gemini بسبب خطأ شبكة ({type(exc).__name__})") from exc
     except ValueError as exc:
         logger.warning("Gemini returned invalid JSON")
         raise OllamaUnavailableError("InvalidJSON") from exc
@@ -203,11 +233,16 @@ async def _request_gemini(messages: list[dict[str, str]], model: Optional[str]) 
 
 
 async def generate_reply(
-    messages: list[dict[str, str]], model: Optional[str] = None, provider: Optional[str] = None,
+    messages: list[dict[str, str]], model: str, provider: Optional[str] = None,
 ) -> str:
-    selected_provider = (provider or settings.DESCRIPTION_PROVIDER).lower()
+    if not model or not model.strip():
+        raise OllamaUnavailableError("يجب تحديد اسم النموذج في الطلب")
+    model = model.strip().removeprefix("models/")
+    selected_provider = (provider or _selected_provider(model)).lower()
     if selected_provider not in {"ollama", "gemini"}:
-        raise OllamaUnavailableError(f"مزوّد الأوصاف غير مدعوم: {selected_provider}")
+        raise OllamaUnavailableError(f"المزوّد المستنتج من النموذج غير مدعوم: {selected_provider}")
+    if selected_provider == "gemini" and not model.lower().startswith("gemini-"):
+        raise OllamaUnavailableError("اسم نموذج Gemini يجب أن يبدأ بـ gemini-")
     last: Optional[OllamaUnavailableError] = None
     for attempt in range(1, max(1, settings.OLLAMA_ATTEMPTS) + 1):
         try:
@@ -217,19 +252,20 @@ async def generate_reply(
         except OllamaUnavailableError as exc:
             last = exc
             if attempt < settings.OLLAMA_ATTEMPTS:
-                logger.info("Retrying Ollama request (attempt %d failed)", attempt)
+                logger.info("Retrying %s model request (attempt %d failed)", selected_provider, attempt)
                 await asyncio.sleep(3)
     raise last
 
 
-def enqueue_description_job(db: Session, factory_id: int) -> models.FactoryDescriptionJob:
+def enqueue_description_job(db: Session, factory_id: int, model: str) -> models.FactoryDescriptionJob:
     factory = factory_service.get_factory(db, factory_id)
     prompt = (factory.activity or "").strip()
     if not prompt:
         raise InvalidInputError("نشاط المصنع مطلوب لتوليد الوصف")
-    provider = settings.DESCRIPTION_PROVIDER
-    if provider not in {"ollama", "gemini"}:
-        raise InvalidInputError("DESCRIPTION_PROVIDER يجب أن يكون ollama أو gemini")
+    model = (model or "").strip().removeprefix("models/")
+    if not model:
+        raise InvalidInputError("يجب تحديد اسم النموذج في الطلب")
+    provider = _selected_provider(model)
 
     history = list(reversed(
         db.query(models.FactoryChatMessage)
@@ -243,7 +279,7 @@ def enqueue_description_job(db: Session, factory_id: int) -> models.FactoryDescr
         factory_id=factory_id,
         prompt=prompt,
         messages=messages,
-        model=(settings.GEMINI_MODEL if provider == "gemini" else settings.OLLAMA_MODEL),
+        model=model,
         provider=provider,
         status="queued",
     )
