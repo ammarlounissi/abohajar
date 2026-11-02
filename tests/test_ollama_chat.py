@@ -334,7 +334,7 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch("app.services.ollama_chat.make_client", return_value=client),
             mock.patch.object(settings, "GEMINI_API_KEY", "do-not-leak"),
-            mock.patch.object(settings, "OLLAMA_ATTEMPTS", 1),
+            mock.patch.object(settings, "AI_MODEL_ATTEMPTS", 1),
         ):
             with self.assertRaises(ollama_chat.OllamaUnavailableError) as caught:
                 await ollama_chat.generate_reply([
@@ -344,6 +344,40 @@ class OllamaServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Gemini أعاد HTTP 403", str(caught.exception))
         self.assertIn("PERMISSION_DENIED", str(caught.exception))
         self.assertNotIn("do-not-leak", str(caught.exception))
+
+    async def test_gemini_overload_503_retries_using_retry_after(self):
+        captured = {"calls": 0}
+
+        def overload_then_success(_request):
+            captured["calls"] += 1
+            if captured["calls"] == 1:
+                return httpx.Response(
+                    503,
+                    headers={"Retry-After": "0.25"},
+                    json={"error": {"status": "UNAVAILABLE", "message": "high demand"}},
+                )
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": [{"text": "عاد Gemini للعمل"}]}}],
+            })
+
+        transport = httpx.MockTransport(overload_then_success)
+        with (
+            mock.patch(
+                "app.services.ollama_chat.make_client",
+                side_effect=lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs),
+            ),
+            mock.patch.object(settings, "GEMINI_API_KEY", "test-secret"),
+            mock.patch.object(settings, "AI_MODEL_ATTEMPTS", 2),
+            mock.patch("app.services.ollama_chat.asyncio.sleep", new_callable=mock.AsyncMock) as sleep,
+        ):
+            result = await ollama_chat.generate_reply([
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "user"},
+            ], model="gemini-3.1-flash-lite")
+
+        self.assertEqual(result, "عاد Gemini للعمل")
+        self.assertEqual(captured["calls"], 2)
+        sleep.assert_awaited_once_with(0.25)
 
 if __name__ == "__main__":
     unittest.main()

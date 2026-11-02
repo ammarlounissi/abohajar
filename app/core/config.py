@@ -61,7 +61,7 @@ class Settings:
     ADMIN_API_KEY = _get("ADMIN_API_KEY")
     OLLAMA_BASE_URL = _get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     OLLAMA_TIMEOUT = _get_int("OLLAMA_TIMEOUT") or 600   # ثوانٍ؛ يطول التوليد حين يرندر الفيديو في العامل الآخر
-    OLLAMA_ATTEMPTS = _get_int("OLLAMA_ATTEMPTS") or 2     # محاولات التوليد عند انتهاء المهلة أو انقطاع الاتصال
+    AI_MODEL_ATTEMPTS = _get_int("AI_MODEL_ATTEMPTS") or _get_int("OLLAMA_ATTEMPTS") or 4
     GEMINI_API_KEY = _get("GEMINI_API_KEY")
     GEMINI_TIMEOUT = _get_int("GEMINI_TIMEOUT") or 90
     FFMPEG_NICE = _get_int("FFMPEG_NICE") or 15            # أولوية منخفضة لـ ffmpeg كي لا يُجوّع Ollama

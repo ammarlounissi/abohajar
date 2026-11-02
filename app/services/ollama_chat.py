@@ -73,7 +73,12 @@ def make_client(
 
 
 class OllamaUnavailableError(Exception):
-    """Ollama did not return a usable response."""
+    """Selected model provider did not return a usable response."""
+
+    def __init__(self, message: str = "", *, retryable: bool = True, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
 
 
 def _variation_block(
@@ -162,7 +167,7 @@ async def _request_ollama(messages: list[dict[str, str]], model: str) -> str:
 
 async def _request_gemini(messages: list[dict[str, str]], model: str) -> str:
     if not settings.GEMINI_API_KEY:
-        raise OllamaUnavailableError("GEMINI_API_KEY غير مضبوط")
+        raise OllamaUnavailableError("GEMINI_API_KEY غير مضبوط", retryable=False)
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
     contents = [
         {"role": "model" if m["role"] == "assistant" else "user",
@@ -205,7 +210,15 @@ async def _request_gemini(messages: list[dict[str, str]], model: str) -> str:
             reason = reason[:300]
         detail = f"Gemini أعاد HTTP {exc.response.status_code}: {reason}"
         logger.warning("Gemini request failed with HTTP %s", exc.response.status_code)
-        raise OllamaUnavailableError(detail) from exc
+        retry_after = exc.response.headers.get("Retry-After")
+        try:
+            retry_after_seconds = min(max(float(retry_after), 0.0), 120.0) if retry_after else None
+        except ValueError:
+            retry_after_seconds = None
+        retryable = exc.response.status_code in {408, 429, 500, 502, 503, 504}
+        raise OllamaUnavailableError(
+            detail, retryable=retryable, retry_after=retry_after_seconds,
+        ) from exc
     except httpx.TimeoutException as exc:
         detail = f"انتهت مهلة الاتصال بـ Gemini بعد {settings.GEMINI_TIMEOUT} ثانية"
         logger.warning("Gemini request timed out")
@@ -244,16 +257,24 @@ async def generate_reply(
     if selected_provider == "gemini" and not model.lower().startswith("gemini-"):
         raise OllamaUnavailableError("اسم نموذج Gemini يجب أن يبدأ بـ gemini-")
     last: Optional[OllamaUnavailableError] = None
-    for attempt in range(1, max(1, settings.OLLAMA_ATTEMPTS) + 1):
+    attempts = max(1, settings.AI_MODEL_ATTEMPTS)
+    for attempt in range(1, attempts + 1):
         try:
             if selected_provider == "gemini":
                 return await _request_gemini(messages, model)
             return await _request_ollama(messages, model)
         except OllamaUnavailableError as exc:
             last = exc
-            if attempt < settings.OLLAMA_ATTEMPTS:
-                logger.info("Retrying %s model request (attempt %d failed)", selected_provider, attempt)
-                await asyncio.sleep(3)
+            if not exc.retryable or attempt >= attempts:
+                break
+            wait_seconds = exc.retry_after
+            if wait_seconds is None:
+                wait_seconds = min(3 * (2 ** (attempt - 1)), 30)
+            logger.info(
+                "Retrying %s model after %s seconds (attempt %d/%d failed)",
+                selected_provider, wait_seconds, attempt, attempts,
+            )
+            await asyncio.sleep(wait_seconds)
     raise last
 
 
