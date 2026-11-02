@@ -1,5 +1,6 @@
 import re
 from datetime import date, datetime, time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import List, Literal, Optional
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -71,6 +72,109 @@ class FactoryChatRequest(AIModelSelection):
 
 class FactoryReelModelRequest(AIModelSelection):
     model_config = ConfigDict(extra="forbid")
+
+
+class FactoryReelScheduleCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(default="gemini-3.1-flash-lite", min_length=1, max_length=100,
+                       pattern=r"^(?:models/)?[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    daily_time: time = time(1, 0)
+    timezone: str = Field(default="Africa/Algiers", min_length=1, max_length=64)
+    start_date: Optional[date] = None
+    stop_date: Optional[date] = None
+    is_active: bool = True
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_schedule_model(cls, value):
+        if isinstance(value, str):
+            return value.strip().removeprefix("models/")
+        return value
+
+    @field_validator("daily_time", mode="before")
+    @classmethod
+    def minute_precision_only(cls, value):
+        if isinstance(value, str) and re.fullmatch(r"\d{2}:\d{2}", value.strip()):
+            return value.strip()
+        if isinstance(value, time) and value.second == 0 and value.microsecond == 0:
+            return value
+        raise ValueError("وقت التشغيل يجب أن يكون بصيغة HH:MM")
+
+    @field_validator("timezone")
+    @classmethod
+    def known_timezone(cls, value):
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("المنطقة الزمنية غير معروفة") from exc
+        return value
+
+    @model_validator(mode="after")
+    def valid_date_range(self):
+        if self.start_date and self.stop_date and self.stop_date < self.start_date:
+            raise ValueError("تاريخ التوقف يجب أن يكون في أو بعد تاريخ الانطلاق")
+        return self
+
+
+class FactoryReelScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: Optional[str] = Field(default=None, min_length=1, max_length=100,
+                                 pattern=r"^(?:models/)?[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    daily_time: Optional[time] = None
+    timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    start_date: Optional[date] = None
+    stop_date: Optional[date] = None
+    is_active: Optional[bool] = None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_update_model(cls, value):
+        return value.strip().removeprefix("models/") if isinstance(value, str) else value
+
+    @field_validator("daily_time", mode="before")
+    @classmethod
+    def validate_update_time(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str) and re.fullmatch(r"\d{2}:\d{2}", value.strip()):
+            return value.strip()
+        if isinstance(value, time) and value.second == 0 and value.microsecond == 0:
+            return value
+        raise ValueError("وقت التشغيل يجب أن يكون بصيغة HH:MM")
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_update_timezone(cls, value):
+        if value is not None:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError("المنطقة الزمنية غير معروفة") from exc
+        return value
+
+    @model_validator(mode="after")
+    def valid_update_date_range(self):
+        if self.start_date and self.stop_date and self.stop_date < self.start_date:
+            raise ValueError("تاريخ التوقف يجب أن يكون في أو بعد تاريخ الانطلاق")
+        return self
+
+
+class FactoryReelScheduleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    factory_id: int
+    model: str
+    daily_time: str
+    timezone: str
+    start_date: date
+    stop_date: Optional[date] = None
+    created_at: datetime
+    is_active: bool
+    last_run_on: Optional[date] = None
+    last_run_at: Optional[datetime] = None
+    last_status: Optional[str] = None
+    last_error: Optional[str] = None
+    last_reel_request_id: Optional[int] = None
 
 
 class FactoryDescriptionJobAccepted(BaseModel):

@@ -1,6 +1,6 @@
 import enum
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    Boolean, Column, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -106,6 +106,9 @@ class Factory(Base):
         "FactoryDescriptionJob", back_populates="factory", cascade="all, delete-orphan",
         order_by="FactoryDescriptionJob.id",
     )
+    reel_schedules = relationship(
+        "FactoryReelSchedule", back_populates="factory", cascade="all, delete-orphan",
+    )
 
 
 class FactoryChatMessage(Base):
@@ -168,6 +171,31 @@ class FactoryReelRequest(Base):
     @property
     def chat_status(self) -> str:
         return self.chat_job.status
+
+
+class FactoryReelSchedule(Base):
+    """Recurring daily task that queues one factory reel request per local calendar day."""
+    __tablename__ = "factory_reel_schedules"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id", ondelete="CASCADE"), nullable=False, index=True)
+    model = Column(String(100), nullable=False, default="gemini-3.1-flash-lite")
+    daily_time = Column(String(5), nullable=False, default="01:00")
+    timezone = Column(String(64), nullable=False, default="Africa/Algiers")
+    start_date = Column(Date, nullable=False)
+    stop_date = Column(Date, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1", index=True)
+    last_run_on = Column(Date, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_status = Column(String(20), nullable=True)
+    last_error = Column(Text, nullable=True)
+    last_reel_request_id = Column(
+        Integer, ForeignKey("factory_reel_requests.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    factory = relationship("Factory", back_populates="reel_schedules")
+    last_reel_request = relationship("FactoryReelRequest")
 
 
 class DriveSyncedFile(Base):

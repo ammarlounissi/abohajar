@@ -1,0 +1,16 @@
+[Unit]
+Description=Hadjret Bladi daily factory reel scheduler
+After=network.target
+
+[Service]
+Type=simple
+User=ammar
+WorkingDirectory=/home/ammar/abohajar
+ExecStart=/home/ammar/abohajar/venv/bin/python -m app.jobs.factory_reel_scheduler
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

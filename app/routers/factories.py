@@ -9,6 +9,7 @@ from app.core.security import require_admin
 from app.services import factories as factory_service
 from app.services import drive_sync
 from app.services import factory_reel_requests
+from app.services import factory_reel_schedules
 from app.services import factory_video_jobs
 from app.services import factory_videos
 from app.services import media_library
@@ -202,6 +203,44 @@ def get_factory_reel_post(factory_id: int, request_id: int, db: Session = Depend
     """حالة الطلب. عند succeeded يوجد post_id (المنشور المعتمد)، وعند failed يظهر السبب في error."""
     request = factory_reel_requests.get_reel_request(db, factory_id, request_id)
     return factory_reel_requests.finalize_request(db, request.id)
+
+
+@router.post(
+    "/{factory_id}/reel-schedules",
+    response_model=schemas.FactoryReelScheduleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_factory_reel_schedule(
+    factory_id: int, schedule: schemas.FactoryReelScheduleCreate, db: Session = Depends(get_db),
+):
+    """إنشاء مهمة يومية لإنشاء ريل المصنع؛ افتراضياً Gemini الساعة 01:00 بتوقيت الجزائر."""
+    data = schedule.model_dump(exclude={"start_date"})
+    if schedule.start_date is not None:
+        data["start_date"] = schedule.start_date
+    return factory_reel_schedules.create_schedule(db, factory_id, data)
+
+
+@router.get("/{factory_id}/reel-schedules", response_model=List[schemas.FactoryReelScheduleResponse])
+def list_factory_reel_schedules(factory_id: int, db: Session = Depends(get_db)):
+    return factory_reel_schedules.list_schedules(db, factory_id)
+
+
+@router.patch(
+    "/{factory_id}/reel-schedules/{schedule_id}",
+    response_model=schemas.FactoryReelScheduleResponse,
+)
+def update_factory_reel_schedule(
+    factory_id: int, schedule_id: int, updates: schemas.FactoryReelScheduleUpdate,
+    db: Session = Depends(get_db),
+):
+    return factory_reel_schedules.update_schedule(
+        db, factory_id, schedule_id, updates.model_dump(exclude_unset=True),
+    )
+
+
+@router.delete("/{factory_id}/reel-schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_factory_reel_schedule(factory_id: int, schedule_id: int, db: Session = Depends(get_db)):
+    factory_reel_schedules.delete_schedule(db, factory_id, schedule_id)
 
 
 @router.post("/{factory_id}/drive-sync", response_model=schemas.DriveSyncResponse)

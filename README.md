@@ -108,9 +108,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 alembic upgrade head
 sudo cp deploy/systemd/hadjret-description-worker.service /etc/systemd/system/
 sudo cp deploy/systemd/hadjret-video-worker.service /etc/systemd/system/
+sudo cp deploy/systemd/hadjret-factory-reel-scheduler.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hadjret-description-worker
 sudo systemctl enable --now hadjret-video-worker
+sudo systemctl enable --now hadjret-factory-reel-scheduler
 sudo systemctl status hadjret-description-worker
 sudo journalctl -u hadjret-description-worker -f
 ```
@@ -533,6 +535,32 @@ python -m app.jobs.delete_posts --status failed --yes
 ### ريل كامل بمعرّف المصنع (`POST /api/factories/{id}/reel-post`)
 
 يجمع مساري الفيديو والوصف ومسار `POST /api/posts/from-factory-video` في طلب واحد. المهمتان تنفذهما عاملتا الفيديو والأوصاف الموجودتان، ويُسجَّل الطلب في جدول `factory_reel_requests`. بعد كل مهمة تستدعي العاملتان `finalize_pending()` فإذا اكتملت المهمتان يُنشأ المنشور المعتمد (`approved`، بلا موعد، بقنوات المصنع المفعّلة) ويُسجَّل `post_id`؛ وإذا فشلت إحداهما يُغلق الطلب `failed` بالسبب. مسار الحالة يحاول الإنهاء أيضاً كشبكة أمان. يلزم تشغيل **العاملتين معاً** وتنفيذ `alembic upgrade head`.
+
+### جدولة ريل يومي للمصنع
+
+بعد تطبيق الترحيل وتشغيل `hadjret-factory-reel-scheduler`، يمكن إنشاء مهمة يومية لكل مصنع. الحقول الافتراضية: النموذج `gemini-3.1-flash-lite`، الساعة `01:00`، المنطقة الزمنية `Africa/Algiers`، تاريخ الانطلاق يوم الإنشاء، بلا تاريخ توقف، ومفعّلة. تاريخ التوقف شامل؛ بعده لا تُجدول تشغيلات جديدة. العامل يفحص كل 30 ثانية، ويسجل محاولة واحدة كحد أقصى لكل يوم محلي. فشل إنشاء الطلب يظهر في `last_status` و`last_error`، ولا يعاد تلقائياً في اليوم نفسه.
+
+```bash
+# إنشاء مهمة بالافتراضيات لمصنع 4
+curl -X POST "$API/api/factories/4/reel-schedules" \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" -d '{}'
+
+# عرض مهام المصنع
+curl "$API/api/factories/4/reel-schedules" -H "X-API-Key: $KEY"
+
+# تعديل الوقت والنموذج أو إيقاف المهمة مؤقتاً
+curl -X PATCH "$API/api/factories/4/reel-schedules/1" \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"daily_time":"02:30","model":"gemini-3.1-flash-lite","is_active":false}'
+
+# حذف المهمة نهائياً
+curl -X DELETE "$API/api/factories/4/reel-schedules/1" -H "X-API-Key: $KEY"
+
+sudo systemctl status hadjret-factory-reel-scheduler
+sudo journalctl -u hadjret-factory-reel-scheduler -f
+```
+
+المسارات هي `POST/GET /api/factories/{factory_id}/reel-schedules` و`PATCH/DELETE /api/factories/{factory_id}/reel-schedules/{schedule_id}`. التوقيت محلي للمنطقة الزمنية المحفوظة. كل تشغيل ينشئ طلب ريل بالطريقة نفسها لمسار `/reel-post`، وبذلك يظل سلوك إنشاء المنشور واعتماده وقنواته مطابقاً للمسار الأصلي؛ النشر الفعلي يخضع لسلوك عامل النشر المجدول الحالي. يلزم تفعيل الخدمة المستمرة أعلاه في الإنتاج؛ وجود المهمة في قاعدة البيانات وحده لا يشغّلها.
 
 
 ### مزامنة صور Google Drive إلى مكتبة المصنع (rclone)
