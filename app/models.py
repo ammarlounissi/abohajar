@@ -283,6 +283,8 @@ class SocialChannel(Base):
     name = Column(String(100), nullable=False)
     remote_id = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    # مستقل عن is_active: الأول للنشر، وهذا العلم لاستقبال البوت.
+    bot_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime, nullable=False, default=utc_now)
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
 

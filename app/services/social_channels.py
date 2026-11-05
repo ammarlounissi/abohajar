@@ -46,7 +46,7 @@ def _exists(db: Session, platform: str, remote_id: str, exclude_id: Optional[int
 
 def list_channels(
     db: Session, platform: Optional[str] = None, is_active: Optional[bool] = None,
-    factory_id: Optional[int] = None,
+    factory_id: Optional[int] = None, bot_enabled: Optional[bool] = None,
 ) -> List[models.SocialChannel]:
     query = db.query(models.SocialChannel)
     if platform is not None:
@@ -55,12 +55,33 @@ def list_channels(
         query = query.filter(models.SocialChannel.is_active.is_(is_active))
     if factory_id is not None:
         query = query.filter(models.SocialChannel.factory_id == factory_id)
+    if bot_enabled is not None:
+        query = query.filter(models.SocialChannel.bot_enabled.is_(bot_enabled))
     return query.order_by(models.SocialChannel.id).all()
 
 
 def list_active(db: Session, platform: str, factory_id: int) -> List[models.SocialChannel]:
     """القنوات المفعّلة لمنصة واحدة: ما يقرأه الناشر بدل المعرّفات في الإعدادات."""
     return list_channels(db, platform=platform, is_active=True, factory_id=factory_id)
+
+
+def get_active_facebook_page(db: Session, page_id: str) -> Optional[models.SocialChannel]:
+    """يرجع صفحة Facebook المؤهلة للبوت التي يخصها webhook، أو None.
+
+    يعتمد على ``bot_enabled`` لا ``is_active``؛ يمكن لرمز وصول واحد أن يخدم عدة صفحات.
+    """
+    normalized = (page_id or "").strip()
+    if not normalized:
+        return None
+    return (
+        db.query(models.SocialChannel)
+        .filter(
+            models.SocialChannel.platform == ChannelPlatform.FACEBOOK.value,
+            models.SocialChannel.remote_id == normalized,
+            models.SocialChannel.bot_enabled.is_(True),
+        )
+        .first()
+    )
 
 
 def get_channel(db: Session, channel_id: int) -> models.SocialChannel:
@@ -71,7 +92,8 @@ def get_channel(db: Session, channel_id: int) -> models.SocialChannel:
 
 
 def create_channel(
-    db: Session, *, factory_id: int, platform, name: str, remote_id: str, is_active: bool = True,
+    db: Session, *, factory_id: int, platform, name: str, remote_id: str,
+    is_active: bool = True, bot_enabled: bool = True,
 ) -> models.SocialChannel:
     if not db.get(models.Factory, factory_id):
         raise NotFoundError("المصنع غير موجود")
@@ -80,7 +102,8 @@ def create_channel(
     if _exists(db, platform, remote_id):
         raise DuplicateError("هذه القناة مسجلة بالفعل")
     channel = models.SocialChannel(
-        factory_id=factory_id, platform=platform, name=name, remote_id=remote_id, is_active=is_active,
+        factory_id=factory_id, platform=platform, name=name, remote_id=remote_id,
+        is_active=is_active, bot_enabled=bot_enabled,
     )
     db.add(channel)
     db.commit()

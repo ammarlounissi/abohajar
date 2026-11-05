@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 from app.core.config import settings
 from app.core.security import verify_signature
 from app.channels.whatsapp.adapter import process_payload
+from app.channels.messenger.adapter import process_payload as process_messenger_payload
 
 router = APIRouter(tags=["webhook"])
 
@@ -35,4 +36,6 @@ async def receive_webhook(request: Request, background: BackgroundTasks):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
     background.add_task(process_payload, payload)
+    # كل معالج يتجاهل حمولة القناة الأخرى، بينما يبقى مسار HTTP رقيقًا.
+    background.add_task(process_messenger_payload, payload)
     return {"status": "received"}

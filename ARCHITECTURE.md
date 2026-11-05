@@ -75,3 +75,48 @@ models.py, schemas.py, core/
 ### مخطط مستقبلي (غير منفَّذ، لا يُبنى قبل الحاجة)
 - **كتالوج ميتا ومتجر خاص بكل مصنع:** اليوم `META_CATALOG_ID` ورقم واتساب كلها لصاحب المشروع. لكل مصنع لاحقاً كتالوجه ومتجره وفيده.
 - **دومين خاص بمصنع:** عمود اختياري `factories.media_base_url` (لا `factory_contacts`)؛ يخدمه Nginx بكتلة `server` لكل دومين تشير إلى جذر المصنع، وتُعاد كتابة روابط منتجاته ثم تُزامَن مع ميتا عند تفعيله. لا مصنع لديه دومين الآن.
+
+
+## الرد على تعليقات Facebook ورسائل Messenger
+
+يستخدم الرد الآلي الطبقات التالية:
+
+- `app/services/customer_support.py`: يحدد النية، ويربط المنشور بالمنتج، ويبني النص. لا يستورد FastAPI أو أي قناة.
+- `app/channels/messenger/adapter.py`: يترجم حمولة Meta إلى تعليق أو رسالة، ويمنع التكرار عبر `processed_messages`.
+- `app/channels/messenger/client.py`: يرسل الردود إلى Graph API باستخدام رمز الصفحة.
+- `app/routers/webhook.py`: يستقبل webhook ويرد بـ `200` فورًا، ثم يشغّل معالجة WhatsApp وMeta في الخلفية.
+
+أضف `META_PAGE_ACCESS_TOKEN` إلى `.env`. إذا لم تضفه، يستخدم التطبيق `META_ACCESS_TOKEN` للتوافق مع الإعداد السابق. يجب أن تشترك كل صفحة مؤهلة في Webhooks مع حقلي `feed` و`messages`. لا يعتمد استقبال الرسائل على `META_PAGE_ID` الواحد.
+
+يرسل النظام ردًا خاصًا على التعليق باستخدام `private_replies`. إذا رفضت Meta الرد الخاص، يحاول إرسال رد عام باستخدام `replies`. أما رسالة Messenger، فيرسل لها ردًا نصيًا عبر `/{page_id}/messages`.
+
+
+### اختيار صفحات البوت
+
+يقرأ محوّل Meta معرّف الصفحة من `entry.id` في webhook لتعليقات Facebook، ومن `recipient.id` لرسائل Messenger. قبل بناء الرد أو تسجيل الرسالة في `processed_messages`، يبحث عن صف مطابق في `social_channels`:
+
+- `platform = facebook`
+- `remote_id = page_id`
+- `bot_enabled = true`
+
+إذا لم يجد الصف، يتجاهل الحدث ولا يرسل أي طلب إلى Graph API. لذلك يمكن استخدام Access Token واحد مع صفحات متعددة، بشرط تسجيل كل صفحة مؤهلة مرة واحدة، وتفعيلها عند السماح للبوت باستقبال رسائلها.
+
+مثال تسجيل صفحة. يفعّل `is_active` النشر، ويفعّل `bot_enabled` استقبال البوت بشكل مستقل:
+
+```bash
+curl -X POST "$API/api/social-channels/" \
+  -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"factory_id":4,"platform":"facebook","name":"صفحة حجرة بلادي","remote_id":"123456789012345","is_active":true,"bot_enabled":true}'
+```
+
+لإيقاف استقبال البوت من صفحة مع إبقائها مفعلة للنشر، اضبط `bot_enabled` على `false`:
+
+```bash
+curl -X PATCH "$API/api/social-channels/CHANNEL_ID" \
+  -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"bot_enabled":false}'
+```
+
+لإيقاف النشر مع إبقاء البوت فعالًا، اضبط `is_active` على `false` واترك `bot_enabled` على `true`.

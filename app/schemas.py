@@ -365,6 +365,7 @@ class SocialChannelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     remote_id: str = Field(min_length=1, max_length=100)    # صيغته تُفحص حسب المنصة في الخدمة
     is_active: bool = True
+    bot_enabled: bool = True
 
     @field_validator("name", "remote_id", mode="before")
     @classmethod
@@ -377,6 +378,7 @@ class SocialChannelUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     remote_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     is_active: Optional[bool] = None
+    bot_enabled: Optional[bool] = None
 
     @field_validator("name", "remote_id", mode="before")
     @classmethod
@@ -386,7 +388,7 @@ class SocialChannelUpdate(BaseModel):
     @model_validator(mode="after")
     def _no_null_required(self):
         # PATCH يقبل غياب الحقل لا null صريحاً في أعمدة NOT NULL
-        for field in ("name", "remote_id", "is_active"):
+        for field in ("name", "remote_id", "is_active", "bot_enabled"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} لا يقبل null")
         return self
@@ -401,6 +403,7 @@ class SocialChannelResponse(BaseModel):
     name: str
     remote_id: str
     is_active: bool
+    bot_enabled: bool
     created_at: datetime
 
 
