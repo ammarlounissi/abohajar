@@ -42,13 +42,11 @@ class Settings:
     VERIFY_TOKEN = _get("VERIFY_TOKEN")
     META_APP_SECRET = _get("META_APP_SECRET")          # للتحقق من توقيع الـ webhook
     META_ACCESS_TOKEN = _get("META_ACCESS_TOKEN")
-    # يفضّل استخدام رمز الصفحة للرد على التعليقات ورسائل Messenger؛
-    # عند غيابه يُستخدم META_ACCESS_TOKEN للتوافق مع الإعداد السابق.
+    # رمز الصفحة اختياري. عند غيابه يستخرجه MessengerClient من META_ACCESS_TOKEN.
     META_PAGE_ACCESS_TOKEN = (
         _get("META_PAGE_ACCESS_TOKEN")
         or _get("PAGE_TOKEN")
         or _get("META_PAGE_TOKEN")
-        or META_ACCESS_TOKEN
     )
     META_CATALOG_ID = _get("META_CATALOG_ID")
     WHATSAPP_PHONE_NUMBER_ID = _get("WHATSAPP_PHONE_NUMBER_ID")

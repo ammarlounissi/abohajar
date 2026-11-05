@@ -46,6 +46,29 @@ class MetaPayloadTests(unittest.TestCase):
 
 
 class MessengerClientTests(unittest.TestCase):
+    def test_extracts_page_token_from_user_token_before_sending(self):
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json={"id": "page1", "access_token": "PAGE_FROM_USER"})
+            return httpx.Response(200, json={"id": "message1"})
+
+        with mock.patch.object(settings, "META_PAGE_ACCESS_TOKEN", ""), \
+                mock.patch.object(settings, "META_ACCESS_TOKEN", "USER_TOKEN"), \
+                mock.patch.object(settings, "META_PAGE_ID", "page1"):
+            result = asyncio.run(
+                MessengerClient(httpx.MockTransport(handler)).send_message("customer1", "مرحبًا")
+            )
+
+        self.assertEqual(result, {"id": "message1"})
+        self.assertEqual(requests[0].method, "GET")
+        self.assertEqual(requests[0].url.path, "/v19.0/page1")
+        self.assertEqual(requests[0].url.params["fields"], "access_token")
+        self.assertEqual(requests[0].url.params["access_token"], "USER_TOKEN")
+        self.assertEqual(parse_qs(requests[1].content.decode())["access_token"], ["PAGE_FROM_USER"])
+
     def test_sends_private_reply_and_message(self):
         requests = []
 

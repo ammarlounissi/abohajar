@@ -10,10 +10,43 @@ class MessengerClient:
     def __init__(self, transport: Optional[httpx.AsyncBaseTransport] = None, page_id: Optional[str] = None):
         self.page_id = page_id or settings.META_PAGE_ID
         self.transport = transport
+        self._page_token: Optional[str] = None
+
+    async def _get_page_token(self, client: httpx.AsyncClient) -> str:
+        """يرجع رمز الصفحة، ويستخرجه من توكن المستخدم عند الحاجة."""
+        if self._page_token:
+            return self._page_token
+        if settings.META_PAGE_ACCESS_TOKEN:
+            self._page_token = settings.META_PAGE_ACCESS_TOKEN
+            return self._page_token
+        if not settings.META_ACCESS_TOKEN:
+            raise RuntimeError("META_ACCESS_TOKEN غير مضبوط")
+        if not self.page_id:
+            raise RuntimeError("META_PAGE_ID غير مضبوط")
+
+        response = await client.get(
+            f"{settings.graph_url}/{self.page_id}",
+            params={
+                "fields": "access_token",
+                "access_token": settings.META_ACCESS_TOKEN,
+            },
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"error": {"message": response.text[:500]}}
+        token = body.get("access_token") if isinstance(body, dict) else None
+        if response.status_code >= 400 or not token:
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            message = error.get("message", "page_access_token_unavailable")
+            raise RuntimeError(f"تعذر استخراج Page Access Token: {message}")
+        self._page_token = token
+        return token
 
     async def _post(self, path: str, data: dict) -> dict:
-        payload = {**data, "access_token": settings.META_PAGE_ACCESS_TOKEN}
         async with httpx.AsyncClient(timeout=20, transport=self.transport) as client:
+            token = await self._get_page_token(client)
+            payload = {**data, "access_token": token}
             response = await client.post(f"{settings.graph_url}/{path.lstrip('/')}", data=payload)
             try:
                 body = response.json()
