@@ -62,8 +62,11 @@ class MessengerClientTests(unittest.TestCase):
                 mock.patch.object(settings, "META_PAGE_ID", "page1"):
             asyncio.run(run())
 
-        self.assertEqual(requests[0].url.path.rsplit("/", 1)[-1], "private_replies")
-        self.assertEqual(parse_qs(requests[0].content.decode())["access_token"], ["PAGE_TOKEN"])
+        self.assertEqual(requests[0].url.path, "/v19.0/page1/messages")
+        private_fields = parse_qs(requests[0].content.decode())
+        self.assertEqual(private_fields["access_token"], ["PAGE_TOKEN"])
+        self.assertEqual(json.loads(private_fields["recipient"][0]), {"comment_id": "c1"})
+        self.assertEqual(json.loads(private_fields["message"][0]), {"text": "رد"})
         fields = parse_qs(requests[1].content.decode())
         self.assertEqual(json.loads(fields["recipient"][0]), {"id": "customer1"})
         self.assertEqual(json.loads(fields["message"][0]), {"text": "مرحبًا"})

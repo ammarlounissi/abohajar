@@ -54,10 +54,11 @@ async def process_comment(db: Session, event: dict, client: MessengerClient) -> 
     if not claim_message(db, "facebook_comment", event["message_id"]):
         return
     reply = build_reply(db, facebook_post_id=event["post_id"], text=event["text"])
-    result = await client.send_private_reply(event["comment_id"], reply.text)
+    page_client = MessengerClient(page_id=event["page_id"], transport=client.transport)
+    result = await page_client.send_private_reply(event["comment_id"], reply.text)
     error = result.get("error") if isinstance(result, dict) else None
     if error and error.get("code") == 100:
-        await client.send_public_reply(event["comment_id"], reply.text)
+        await page_client.send_public_reply(event["comment_id"], reply.text)
 
 
 async def process_message(db: Session, event: dict, client: MessengerClient) -> None:

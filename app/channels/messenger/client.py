@@ -24,10 +24,23 @@ class MessengerClient:
             return body
 
     async def send_private_reply(self, comment_id: str, message: str) -> dict:
-        return await self._post(f"{comment_id}/private_replies", {"message": message})
+        """يرسل رسالة خاصة إلى صاحب تعليق Facebook.
+
+        تستخدم Meta حاليًا Send API عبر ``/{page_id}/messages``.
+        endpoint ``/{comment_id}/private_replies`` قديم ولا يعمل مع الإصدارات الحالية.
+        """
+        return await self._post(
+            f"{self.page_id}/messages",
+            {
+                "recipient": json.dumps({"comment_id": comment_id}),
+                "message": json.dumps({"text": message}, ensure_ascii=False),
+                "messaging_type": "RESPONSE",
+            },
+        )
 
     async def send_public_reply(self, comment_id: str, message: str) -> dict:
-        return await self._post(f"{comment_id}/replies", {"message": message})
+        """ينشر ردًا عامًا على تعليق Facebook."""
+        return await self._post(f"{comment_id}/comments", {"message": message})
 
     async def send_message(self, recipient_id: str, message: str) -> dict:
         return await self._post(
