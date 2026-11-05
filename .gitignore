@@ -30,3 +30,16 @@ media_backup/
 # Operating System files
 .DS_Store
 Thumbs.db*.bak-*
+all_messages_3years.csv
+# ملفات مؤقتة
+__pycache__/
+*.pyc
+*.pyo
+*.bak
+*.bak.*
+*.db.bak*
+.env.bak
+.env.bak.*
+static/
+all_messages_3years.csv
+hojrat_bladi.db.*.bak
