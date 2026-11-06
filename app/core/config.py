@@ -41,6 +41,11 @@ class Settings:
     # Meta / WhatsApp
     VERIFY_TOKEN = _get("VERIFY_TOKEN")
     META_APP_SECRET = _get("META_APP_SECRET")          # للتحقق من توقيع الـ webhook
+    META_APP_ID = _get("META_APP_ID")
+    FACEBOOK_REDIRECT_URI = _get(
+        "FACEBOOK_REDIRECT_URI",
+        "https://api.hadjretbladi.com/auth/facebook/callback",
+    )
     META_ACCESS_TOKEN = _get("META_ACCESS_TOKEN")
     # رمز الصفحة اختياري. عند غيابه يستخرجه MessengerClient من META_ACCESS_TOKEN.
     META_PAGE_ACCESS_TOKEN = (

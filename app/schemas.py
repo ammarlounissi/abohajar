@@ -360,14 +360,15 @@ class DriveSyncResponse(BaseModel):
 
 # --- قنوات النشر ---
 class SocialChannelCreate(BaseModel):
-    factory_id: int = Field(gt=0)
+    factory_id: Optional[int] = Field(default=None, gt=0)
     platform: ChannelPlatform
     name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
     remote_id: str = Field(min_length=1, max_length=100)    # صيغته تُفحص حسب المنصة في الخدمة
     is_active: bool = True
     bot_enabled: bool = True
 
-    @field_validator("name", "remote_id", mode="before")
+    @field_validator("name", "description", "remote_id", mode="before")
     @classmethod
     def strip_text(cls, v):
         return v.strip() if isinstance(v, str) else v
@@ -376,11 +377,12 @@ class SocialChannelCreate(BaseModel):
 class SocialChannelUpdate(BaseModel):
     """المنصة لا تتغير بعد الإنشاء (احذف القناة وأنشئ غيرها)."""
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=1000)
     remote_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     is_active: Optional[bool] = None
     bot_enabled: Optional[bool] = None
 
-    @field_validator("name", "remote_id", mode="before")
+    @field_validator("name", "description", "remote_id", mode="before")
     @classmethod
     def strip_text(cls, v):
         return v.strip() if isinstance(v, str) else v
@@ -388,7 +390,7 @@ class SocialChannelUpdate(BaseModel):
     @model_validator(mode="after")
     def _no_null_required(self):
         # PATCH يقبل غياب الحقل لا null صريحاً في أعمدة NOT NULL
-        for field in ("name", "remote_id", "is_active", "bot_enabled"):
+        for field in ("name", "description", "remote_id", "is_active", "bot_enabled"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} لا يقبل null")
         return self
@@ -398,9 +400,10 @@ class SocialChannelResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    factory_id: int
+    factory_id: Optional[int]
     platform: str
     name: str
+    description: str
     remote_id: str
     is_active: bool
     bot_enabled: bool

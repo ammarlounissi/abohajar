@@ -272,7 +272,7 @@ class FactoryVideoJob(Base):
 
 class SocialChannel(Base):
     """قناة نشر (صفحة فيسبوك / حساب إنستغرام احترافي / قناة تيليجرام). تغني عن حفظ المعرّفات في الإعدادات:
-    القناة تتبع مصنعاً واحداً، ورمز ميتا نفسه يخدم عدة صفحات للمصنع.
+    القناة قد تتبع مصنعاً أو تكون قناة عامة مرتبطة بمستخدم عبر Facebook Login for Business.
     remote_id هو المعرّف الأصلي عند المنصة، وis_active=False يوقف النشر إليها دون حذفها.
     (اسم الصنف ليس Channel لأن Channel قائم أصلاً لقنوات محادثة المصانع.)"""
     __tablename__ = "social_channels"
@@ -281,12 +281,18 @@ class SocialChannel(Base):
     id = Column(Integer, primary_key=True, index=True)
     platform = Column(String(30), nullable=False, index=True)
     name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=False, default="", server_default="")
     remote_id = Column(String(100), nullable=False)
+    page_id = Column(String(100), nullable=True, unique=True, index=True)
+    page_name = Column(String(255), nullable=True)
+    page_access_token = Column(String(512), nullable=True)
+    owner_fbid = Column(String(100), nullable=True, index=True)
+    owner_name = Column(String(255), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     # مستقل عن is_active: الأول للنشر، وهذا العلم لاستقبال البوت.
     bot_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime, nullable=False, default=utc_now)
-    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=True, index=True)
 
     factory = relationship("Factory", back_populates="social_channels")
 

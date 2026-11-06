@@ -92,17 +92,19 @@ def get_channel(db: Session, channel_id: int) -> models.SocialChannel:
 
 
 def create_channel(
-    db: Session, *, factory_id: int, platform, name: str, remote_id: str,
+    db: Session, *, factory_id: Optional[int] = None, platform, name: str,
+    description: str = "", remote_id: str,
     is_active: bool = True, bot_enabled: bool = True,
 ) -> models.SocialChannel:
-    if not db.get(models.Factory, factory_id):
+    if factory_id is not None and not db.get(models.Factory, factory_id):
         raise NotFoundError("المصنع غير موجود")
     platform = _platform_value(platform)
     remote_id = normalize_remote_id(platform, remote_id)
     if _exists(db, platform, remote_id):
         raise DuplicateError("هذه القناة مسجلة بالفعل")
     channel = models.SocialChannel(
-        factory_id=factory_id, platform=platform, name=name, remote_id=remote_id,
+        factory_id=factory_id, platform=platform, name=name,
+        description=description or "", remote_id=remote_id,
         is_active=is_active, bot_enabled=bot_enabled,
     )
     db.add(channel)
