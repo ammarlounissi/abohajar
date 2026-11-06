@@ -84,6 +84,9 @@ class Settings:
      ).split(",")
     if o.strip()
 ]
+    # الصفحة التي يعود إليها المستخدم بعد ربط فيسبوك. تُقرأ من .env فقط، بلا قيمة افتراضية؛
+    # إن تُركت فارغة يرجع callback استجابة JSON.
+    FACEBOOK_SUCCESS_REDIRECT_URL = _get("FACEBOOK_SUCCESS_REDIRECT_URL")
 
     # رقم واتساب الذي تدعو إليه منشورات المنتجات (صيغة محلية 0549194378 أو دولية)
     POST_CONTACT_PHONE = _get("POST_CONTACT_PHONE", "0549194378")

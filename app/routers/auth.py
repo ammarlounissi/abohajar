@@ -6,7 +6,7 @@ import json
 import secrets
 import time
 from typing import Any
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,6 +37,16 @@ def _require_oauth_config() -> None:
             status_code=500,
             detail=f"إعدادات Facebook OAuth ناقصة: {', '.join(missing)}",
         )
+
+
+def _frontend_redirect(**params: str | int) -> RedirectResponse | None:
+    """يعيد المستخدم إلى الواجهة مع نتيجة الربط في query. None إن لم يُضبط عنوان الواجهة."""
+    base = settings.FACEBOOK_SUCCESS_REDIRECT_URL
+    if not base:
+        return None
+    parts = urlsplit(base)
+    query = "&".join(filter(None, [parts.query, urlencode(params)]))
+    return RedirectResponse(urlunsplit(parts._replace(query=query)), status_code=303)
 
 
 def _make_state() -> str:
@@ -167,6 +177,9 @@ async def facebook_callback(
     """يبدّل code بتوكن المستخدم ويربط صفحاته ويشترك في Webhooks."""
     _require_oauth_config()
     if error:
+        redirect = _frontend_redirect(facebook="error", reason=error)
+        if redirect:
+            return redirect
         raise HTTPException(status_code=400, detail=f"Facebook رفض التفويض: {error}")
     if not code or not state:
         raise HTTPException(status_code=400, detail="code وstate مطلوبان")
@@ -250,6 +263,13 @@ async def facebook_callback(
             linked_pages.append({"page_id": page_id, "page_name": page_name})
 
     db.commit()
+    redirect = _frontend_redirect(
+        facebook="connected",
+        pages=len(linked_pages),
+        errors=len(subscription_errors),
+    )
+    if redirect:
+        return redirect
     return {
         "status": "success",
         "owner_fbid": owner.get("id"),
