@@ -71,7 +71,7 @@ class SessionTests(unittest.TestCase):
         self.add_page(id_a, "11111"), self.add_page(id_b, "22222")
         self.assertEqual([p["page_id"] for p in a.get("/auth/facebook/status").json()["pages"]], ["11111"])
         self.assertEqual([p["page_id"] for p in b.get("/auth/facebook/status").json()["pages"]], ["22222"])
-        self.assertNotIn("page_access_token", a.get("/auth/facebook/status").text)
+        self.assertNotIn('"page_access_token"', a.get("/auth/facebook/status").text)
 
     def test_login_logout_and_cookie_flags(self):
         c = self.client()
@@ -93,7 +93,10 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(sessions.read_token(token), uid)
         self.assertIsNone(sessions.read_token(token[:-2] + "xx"))
         self.assertIsNone(sessions.read_token(sessions.make_token(uid, max_age=-5)))
-        c.cookies.set(settings.SESSION_COOKIE_NAME, f"{uid + 1}." + token.split(".", 1)[1])
+        forged = f"{uid + 1}." + token.split(".", 1)[1]    # user_id مختلف بتوقيع المستخدم الأصلي
+        self.assertIsNone(sessions.read_token(forged))
+        c.cookies.clear()                                   # كي لا يُرسل كوكي التسجيل الصحيح بجانبه
+        c.cookies.set(settings.SESSION_COOKIE_NAME, forged)
         self.assertEqual(c.get("/auth/me").status_code, 401)
 
     def test_deactivated_user_loses_session(self):

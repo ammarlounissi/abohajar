@@ -9,11 +9,15 @@
 - اختبارات: test_users.py، test_auth_session.py، وتعديل test_facebook_callback_redirect.py
 
 ## store.hadjretbladi (الواجهة)
-- app/connect/connect-client.jsx: نموذج دخول/تسجيل + زر فيسبوك + جدول صفحاتي + زر «فك الارتباط»
+- app/connect/connect-client.jsx: صفحة فيسبوك فقط (زر Facebook + جدول صفحاتي + زر «فك الارتباط») مع رابط إلى /login/
+- app/login/ (جديد): الدخول وإنشاء الحساب بالبريد وكلمة السر في صفحة مستقلة، وبعد النجاح تُفتح /connect/
+- app/_lib/api.js (جديد): عميل API مشترك بين الصفحتين
 - app/connect/done/done-client.jsx: رسالتا خطأ جديدتان
+- app/robots.ts: منع فهرسة /login/ أيضاً
 
 ## بعد النسخ
 1. `alembic upgrade head`
 2. `pytest tests/test_users.py tests/test_auth_session.py tests/test_facebook_callback_redirect.py`
 3. أضف SESSION_SECRET إلى .env (اختياري، وإلا يُشتق من META_APP_SECRET)
+   وللحوار بالعربية: FACEBOOK_LOGIN_LOCALE=ar-ar
 4. أضف صلاحية email في تطبيق ميتا

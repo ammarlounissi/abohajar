@@ -46,6 +46,8 @@ class Settings:
         "FACEBOOK_REDIRECT_URI",
         "https://api.hadjretbladi.com/auth/facebook/callback",
     )
+    # نطاق لغة حوار فيسبوك (مثل ar-ar لحوار بالعربية). فارغ = www، ويتبع لغة حساب المستخدم.
+    FACEBOOK_LOGIN_LOCALE = _get("FACEBOOK_LOGIN_LOCALE")
     META_ACCESS_TOKEN = _get("META_ACCESS_TOKEN")
     # رمز الصفحة اختياري. عند غيابه يستخرجه MessengerClient من META_ACCESS_TOKEN.
     META_PAGE_ACCESS_TOKEN = (

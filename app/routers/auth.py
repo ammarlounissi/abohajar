@@ -237,8 +237,9 @@ async def facebook_login(request: Request):
         "response_type": "code",
         "state": state,
     }
+    host = f"{settings.FACEBOOK_LOGIN_LOCALE}.facebook.com" if settings.FACEBOOK_LOGIN_LOCALE else "www.facebook.com"
     response = RedirectResponse(
-        f"https://www.facebook.com/{settings.GRAPH_API_VERSION}/dialog/oauth?{urlencode(params)}"
+        f"https://{host}/{settings.GRAPH_API_VERSION}/dialog/oauth?{urlencode(params)}"
     )
     response.set_cookie(
         _OAUTH_COOKIE, state.split(".")[1], max_age=_STATE_MAX_AGE, httponly=True,
