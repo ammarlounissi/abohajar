@@ -23,7 +23,7 @@ app = FastAPI(title="IkhlasDZ Bot", version="1.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=True,   # كوكي الجلسة يُرسل من الواجهة؛ ALLOWED_ORIGINS صريحة فلا يُسمح بـ *
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )

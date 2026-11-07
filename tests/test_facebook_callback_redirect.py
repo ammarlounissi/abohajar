@@ -54,8 +54,11 @@ class CallbackRedirectTests(unittest.TestCase):
             return {"success": True}
 
         with patch.object(auth, "_graph_get", fake_get), patch.object(auth, "_graph_post", fake_post):
-            res = self.client.get(f"/auth/facebook/callback?code=c&state={auth._make_state()}")
+            state = auth._make_state()
+            self.client.cookies.set("hb_oauth", state.split(".")[1])
+            res = self.client.get(f"/auth/facebook/callback?code=c&state={state}")
         self.assertEqual(res.status_code, 303)
+        self.assertIn("hb_session=", res.headers.get("set-cookie", ""))
         self.assertEqual(res.headers["location"], "https://hadjretbladi.com/?facebook=connected&pages=1&errors=0")
 
     def test_denied_redirects_with_reason(self):

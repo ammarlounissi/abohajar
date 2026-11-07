@@ -88,6 +88,11 @@ class Settings:
     # إن تُركت فارغة يرجع callback استجابة JSON.
     FACEBOOK_SUCCESS_REDIRECT_URL = _get("FACEBOOK_SUCCESS_REDIRECT_URL")
 
+    # جلسة المستخدم (كوكي HttpOnly موقّع). SESSION_SECRET سرّ مستقل؛ إن غاب يُشتق من META_APP_SECRET.
+    SESSION_SECRET = _get("SESSION_SECRET")
+    SESSION_MAX_AGE = _get_int("SESSION_MAX_AGE") or 14 * 24 * 3600   # ثوانٍ
+    SESSION_COOKIE_NAME = _get("SESSION_COOKIE_NAME", "hb_session")
+
     # رقم واتساب الذي تدعو إليه منشورات المنتجات (صيغة محلية 0549194378 أو دولية)
     POST_CONTACT_PHONE = _get("POST_CONTACT_PHONE", "0549194378")
 
@@ -161,6 +166,11 @@ class Settings:
     def product_link(self, sku: str) -> str:
         """رابط صفحة المنتج من PRODUCT_LINK_TEMPLATE. يقبل {SKU} أو {sku} (الأول هو المعتمد في الوثيقة)."""
         return self.PRODUCT_LINK_TEMPLATE.replace("{SKU}", sku).replace("{sku}", sku)
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        """Secure افتراضياً إلا في التطوير المحلي عبر http."""
+        return not self.BASE_URL.startswith("http://")
 
     @property
     def graph_url(self) -> str:

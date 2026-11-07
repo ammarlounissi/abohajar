@@ -1,6 +1,6 @@
 import enum
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    Boolean, CheckConstraint, Column, Date, DateTime, Enum, Float, ForeignKey, Index, Integer, JSON, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -293,6 +293,8 @@ class SocialChannel(Base):
     bot_enabled = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime, nullable=False, default=utc_now)
     factory_id = Column(Integer, ForeignKey("factories.id"), nullable=True, index=True)
+    # المستخدم (جدول users) الذي ربط الصفحة وحده يراها في /connect. فارغ = قناة قديمة لم يُطالَب بها بعد
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
 
     factory = relationship("Factory", back_populates="social_channels")
 
@@ -455,3 +457,28 @@ class PendingMediaUpdate(Base):
     channel = Column(String(20), nullable=False, default=Channel.WHATSAPP.value)
     media_ref = Column(String(255), nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+class User(Base):
+    """مستخدم يسجّل الدخول إلى لوحة التحكم: إما بفيسبوك (facebook_id) أو بالبريد وكلمة السر
+    (email + password_hash)، وقد يملك الحسابُ الطريقتين معاً. الحقول الفارغة تعني أن الطريقة غير مفعّلة.
+    لا نخزّن كلمة السر نفسها أبداً، بل بصمتها (انظر services/users.py).
+    هذا الجدول للدخول فقط؛ صفحات فيسبوك المربوطة للنشر تبقى في social_channels (owner_fbid)."""
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("email IS NOT NULL OR facebook_id IS NOT NULL", name="ck_users_has_login_method"),
+        CheckConstraint("password_hash IS NULL OR email IS NOT NULL", name="ck_users_password_needs_email"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), nullable=True, unique=True, index=True)       # بحروف صغيرة دائماً
+    password_hash = Column(String(255), nullable=True)
+    facebook_id = Column(String(100), nullable=True, unique=True, index=True)  # معرّف المستخدم عند فيسبوك (app-scoped)
+    name = Column(String(255), nullable=False, default="", server_default="")
+    role = Column(String(20), nullable=False, default="user", server_default="user")  # user | factory | admin
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    last_login_at = Column(DateTime, nullable=True)
+
+    factory = relationship("Factory")
