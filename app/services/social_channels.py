@@ -133,3 +133,95 @@ def delete_channel(db: Session, channel_id: int) -> None:
         raise ConflictError("للقناة منشورات مرتبطة بها: عطّلها (is_active=false) بدل حذفها")
     db.delete(channel)
     db.commit()
+
+
+def link_facebook_page(
+    db: Session, *, user_id: int, page_id: str, page_name: str, page_token: str,
+    owner_fbid: Optional[str], owner_name: Optional[str],
+) -> Optional[models.SocialChannel]:
+    """يربط صفحة (من Facebook Login) بالمستخدم. لا تنفّذ commit (المستدعي يحفظ دفعة واحدة).
+    ترجع None دون تغيير إن كانت الصفحة مربوطة بمستخدم آخر: لا تُسرق صفحة بإعادة الربط."""
+    channel = db.query(models.SocialChannel).filter(models.SocialChannel.page_id == page_id).first()
+    label = page_name or page_id
+    if channel is None:
+        channel = models.SocialChannel(
+            platform=ChannelPlatform.FACEBOOK.value, name=label,
+            description=f"صفحة Facebook: {label}", remote_id=page_id, page_id=page_id,
+            page_name=label, page_access_token=page_token, owner_fbid=owner_fbid,
+            owner_name=owner_name, factory_id=None, user_id=user_id,
+            is_active=True, bot_enabled=True,
+        )
+        db.add(channel)
+        return channel
+    if channel.user_id is not None and channel.user_id != user_id:
+        return None
+    channel.user_id = user_id
+    channel.name = page_name or channel.name
+    channel.description = channel.description or f"صفحة Facebook: {label}"
+    channel.remote_id = page_id
+    channel.page_name = page_name or channel.page_name
+    channel.page_access_token = page_token
+    channel.owner_fbid = owner_fbid or channel.owner_fbid
+    channel.owner_name = owner_name or channel.owner_name
+    channel.is_active = True
+    channel.bot_enabled = True
+    return channel
+
+
+def list_user_facebook_pages(db: Session, user_id: int) -> List[models.SocialChannel]:
+    """صفحات فيسبوك التي يملكها هذا المستخدم فقط."""
+    return (
+        db.query(models.SocialChannel)
+        .filter(
+            models.SocialChannel.platform == ChannelPlatform.FACEBOOK.value,
+            models.SocialChannel.user_id == user_id,
+        )
+        .order_by(models.SocialChannel.id)
+        .all()
+    )
+
+
+def delete_by_owner_fbid(db: Session, owner_fbid: str) -> int:
+    """يحذف كل قنوات صاحب حساب فيسبوك (طلبا deauthorize/delete من فيسبوك). لا commit."""
+    return (
+        db.query(models.SocialChannel)
+        .filter(models.SocialChannel.owner_fbid == owner_fbid)
+        .delete(synchronize_session=False)
+    )
+
+
+def get_user_facebook_page(db: Session, user_id: int, page_id: str) -> models.SocialChannel:
+    """صفحة فيسبوك يملكها هذا المستخدم. صفحة غيره كغير الموجودة (لا نكشف وجودها)."""
+    channel = (
+        db.query(models.SocialChannel)
+        .filter(
+            models.SocialChannel.platform == ChannelPlatform.FACEBOOK.value,
+            models.SocialChannel.page_id == page_id,
+            models.SocialChannel.user_id == user_id,
+        )
+        .first()
+    )
+    if channel is None:
+        raise NotFoundError("الصفحة غير موجودة")
+    return channel
+
+
+def remove_user_facebook_page(db: Session, channel: models.SocialChannel) -> str:
+    """يحذف صفحة المستخدم وبياناتها (متطلب فيسبوك). يرجع "deleted" أو "detached".
+    إن كانت للصفحة منشورات منشورة/مجدولة (post_deliveries تمنع حذف الصف) يبقى الصف مفرَّغاً للسجل فقط:
+    يُمحى التوكن وبيانات المالك ويُفكّ ربطه بالمستخدم ويُعطَّل. إعادة ربط الصفحة لاحقاً تعيد تفعيله."""
+    has_deliveries = (
+        db.query(models.PostDelivery).filter(models.PostDelivery.channel_id == channel.id).first() is not None
+    )
+    if not has_deliveries:
+        db.delete(channel)
+        db.commit()
+        return "deleted"
+    channel.page_access_token = None
+    channel.owner_fbid = None
+    channel.owner_name = None
+    channel.user_id = None
+    channel.is_active = False
+    channel.bot_enabled = False
+    db.commit()
+    return "detached"
