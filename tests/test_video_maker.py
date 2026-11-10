@@ -52,6 +52,11 @@ class VideoMakerBase(unittest.TestCase):
 
 
 class FilterGraphTests(unittest.TestCase):
+    def test_every_clip_is_converted_to_limited_range(self):
+        for fit in ("crop", "blur"):
+            graph = video_maker.build_filter_graph(3, 7.0, fit)
+            self.assertEqual(graph.count(f"{video_maker.LIMITED_RANGE},format=yuv420p"), 3, fit)
+
     def test_single_image_has_no_crossfade(self):
         graph = video_maker.build_filter_graph(1, 7.0, "crop")
         self.assertNotIn("xfade", graph)

@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 WIDTH, HEIGHT = 1080, 1920               # مقاس ريلز إنستغرام الموصى به (9:16)
 CANVAS_W, CANVAS_H = 2160, 3840          # نركّب اللقطة بضعف الدقة ثم نصغّرها: حركة التكبير أنعم بلا اهتزاز
 FPS = 30
+# ffmpeg 7+ يُبقي صور JPEG بالمدى الكامل (0-255) فيخرج الفيديو yuvj420p وتختلف مستويات اللقطات عن PNG/WebP.
+# نحوّل كل لقطة صراحةً إلى المدى المحدود (16-235) الذي تتوقعه إنستغرام.
+LIMITED_RANGE = "scale=out_range=tv"
 VIDEO_EXT = ".mp4"
 
 DEFAULT_DURATION = 7.0
@@ -199,7 +202,7 @@ def build_filter_graph(
             x_position = "iw/2-(iw/zoom/2)"
         parts.append(
             f"[c{i}]zoompan=z='{zoom}':x='{x_position}':y='ih/2-(ih/zoom/2)'"
-            f":d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},format=yuv420p,setsar=1[v{i}]"
+            f":d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS},{LIMITED_RANGE},format=yuv420p,setsar=1[v{i}]"
         )
 
     if count == 1:
