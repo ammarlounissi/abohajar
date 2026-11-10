@@ -144,7 +144,8 @@ curl "$API/api/factories/1/videos/jobs/123" -H "X-API-Key: $KEY"
 
 ```bash
 curl http://127.0.0.1:8000/health          # {"status":"ok"}
-# التوثيق التفاعلي: http://127.0.0.1:8000/docs
+# التوثيق التفاعلي: http://127.0.0.1:8000/docs  (و /redoc و /openapi.json)
+# محجوب عن العامة: يطلب المتصفح اسم مستخدم (أي اسم) وكلمة سر = قيمة ADMIN_API_KEY
 ```
 
 ### الاستيراد من مجلد الصور وCSV
