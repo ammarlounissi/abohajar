@@ -50,6 +50,8 @@ class FactoryResponse(FactoryBase):
 
     id: int
     is_active: bool
+    kind: str = "supplier"                 # supplier | customer (مساحة زبون لصفحته المربوطة)
+    phone_number: Optional[str] = None     # فارغ لمساحات الزبائن
 
 
 class AIModelSelection(BaseModel):
@@ -435,6 +437,29 @@ class FacebookServiceStatus(BaseModel):
 
 class FacebookPageSelection(BaseModel):
     page_id: str = Field(min_length=1, max_length=100)
+
+
+# --- مساحة الزبون (مكتبة الصفحة المربوطة بخدمة) ---
+class CustomerWorkspaceResponse(BaseModel):
+    """ملخص مساحة الزبون لخدمة: صفحتها المربوطة، عدد وسائطها، وحدود الرفع."""
+    service: str
+    page_id: str
+    page_name: str
+    images_count: int
+    videos_count: int
+    max_images: int
+    max_image_bytes: int
+    image_extensions: List[str]
+
+
+class CustomerMediaResponse(BaseModel):
+    """وسيط في مكتبة صفحة الزبون. بلا رقم المصنع: الزبون لا يتعامل به."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    media_type: str
+    url: str
+    description: Optional[str] = None
 
 
 # --- المنتجات ---

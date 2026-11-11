@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.core.config import settings
 from app.core.database import get_db
-from app.services import facebook_services, sessions, social_channels, users
+from app.services import customer_workspaces, facebook_services, sessions, social_channels, users
 from app.services.errors import ConflictError, DuplicateError, InvalidInputError, NotFoundError, ServiceError
 
 router = APIRouter(tags=["auth"])
@@ -282,6 +282,8 @@ def _connect_service_page(
     if channel is None:
         return False
     facebook_services.activate(db, user_id=user.id, service=service.key, channel=channel)
+    # الصفحة المربوطة = مصنع خاص بها يملك مكتبتها وفيديوهاتها (يُنشأ هنا، أو يُستعاد إن سبق ربطها)
+    customer_workspaces.ensure_workspace(db, user_id=user.id, channel=channel)
     return True
 
 

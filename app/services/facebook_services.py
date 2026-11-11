@@ -139,6 +139,13 @@ def activate(
     return connection
 
 
+def connected_channel(db: Session, user_id: int, service: str) -> Optional[models.SocialChannel]:
+    """الصفحة المربوطة بهذه الخدمة لهذا المستخدم، أو None. لا تُرجع صفحة لم تعد ملكه."""
+    connection = _connection(db, user_id, service)
+    channel = connection.channel if connection is not None else None
+    return channel if channel is not None and channel.user_id == user_id else None
+
+
 def cancel_selection(db: Session, user_id: int, service: str) -> None:
     """يلغي الاختيار المعلّق ويمحو التوكن المؤقت. صف بلا صفحة ولا اختيار معلّق لا معنى له فيُحذف."""
     connection = _connection(db, user_id, service)
