@@ -242,6 +242,28 @@ class CustomerWorkspaceTests(WorkspaceTestBase):
             self.assertEqual(res.status_code, 422)
             self.assertIn("الحد الأقصى", res.json()["detail"])
 
+    def test_image_list_pages_newest_first_with_total_in_workspace(self):
+        """لوحة الزبون تعرض المكتبة صفحات: skip/limit على قائمة الصور، والعدد الكلي من /workspace."""
+        self.link(1)
+        client = self.client(1)
+        ids = [self.upload(client, name=f"p{i}.png").json()["id"] for i in range(5)]
+        newest_first = list(reversed(ids))
+
+        def page(skip, limit):
+            response = client.get(f"{BASE}/media", params={"media_type": "image", "skip": skip, "limit": limit})
+            self.assertEqual(response.status_code, 200)
+            return [item["id"] for item in response.json()]
+
+        self.assertEqual(page(0, 2), newest_first[0:2])
+        self.assertEqual(page(2, 2), newest_first[2:4])
+        self.assertEqual(page(4, 2), newest_first[4:5])
+        self.assertEqual(page(6, 2), [])
+        self.assertEqual(client.get(f"{BASE}/workspace").json()["images_count"], 5)
+
+        client.delete(f"{BASE}/media/{newest_first[0]}")
+        self.assertEqual(page(0, 2), newest_first[1:3])
+        self.assertEqual(client.get(f"{BASE}/workspace").json()["images_count"], 4)
+
     # ───── العزل بين الزبائن ─────
 
     def test_users_cannot_see_or_delete_each_others_media(self):
