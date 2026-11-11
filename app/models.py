@@ -77,15 +77,24 @@ class PostApproval(str, enum.Enum):
     REJECTED = "rejected"
 
 
+class FactoryKind(str, enum.Enum):
+    """نوع المصنع. يُخزَّن نصاً عادياً في factories.kind."""
+    SUPPLIER = "supplier"   # مورّد تديره الإدارة (منتجات، واتساب، Drive)
+    CUSTOMER = "customer"   # مساحة زبون أُنشئت لصفحته المربوطة بخدمة (انظر CustomerWorkspace)
+
+
 class Factory(Base):
-    """أصحاب المصانع / الموردون"""
+    """أصحاب المصانع / الموردون، ومساحات الزبائن (kind=customer): كل صفحة يربطها زبون بخدمة لها مصنع
+    خاص بها يملك مكتبتها وفيديوهاتها ومنشوراتها."""
     __tablename__ = "factories"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
+    kind = Column(String(20), nullable=False, default=FactoryKind.SUPPLIER.value, server_default="supplier")
     activity = Column(Text, nullable=False, default="", server_default="")
     # قديم: رقم واتساب الأساسي. مصدر الحقيقة لتعريف المصنع في القنوات هو factory_contacts.
-    phone_number = Column(String(20), unique=True, index=True, nullable=False)
+    # فارغ لمساحات الزبائن (لا رقم لها).
+    phone_number = Column(String(20), unique=True, index=True, nullable=True)
     address = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utc_now)
@@ -324,6 +333,22 @@ class ServiceConnection(Base):
     updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
     channel = relationship("SocialChannel")
+
+
+class CustomerWorkspace(Base):
+    """مساحة عمل زبون: المصنع الذي يملك وسائط صفحة ربطها هذا المستخدم بخدمة.
+    المفتاح (المستخدم، معرّف الصفحة عند فيسبوك) لا صف القناة: صف القناة يُحذف عند فك الارتباط، وهذا الصف
+    يبقى فتعود المكتبة لصاحبها إن أعاد ربط الصفحة نفسها، ولا تنتقل إلى مستخدم آخر يربطها بعده."""
+    __tablename__ = "customer_workspaces"
+    __table_args__ = (UniqueConstraint("user_id", "page_id", name="uq_customer_workspaces_user_page"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    page_id = Column(String(100), nullable=False)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+
+    factory = relationship("Factory")
 
 
 class Product(Base):

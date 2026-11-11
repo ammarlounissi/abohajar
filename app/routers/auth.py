@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from typing import Any
@@ -17,10 +18,11 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.core.config import settings
 from app.core.database import get_db
-from app.services import facebook_services, sessions, social_channels, users
+from app.services import customer_workspaces, facebook_services, sessions, social_channels, users
 from app.services.errors import ConflictError, DuplicateError, InvalidInputError, NotFoundError, ServiceError
 
 router = APIRouter(tags=["auth"])
+logger = logging.getLogger(__name__)
 
 # الأذونات المطلوبة من فيسبوك تتبع الخدمة (services/facebook_services.py)، ولا تُطلب كلها دفعة واحدة.
 _STATE_MAX_AGE = 600
@@ -282,7 +284,24 @@ def _connect_service_page(
     if channel is None:
         return False
     facebook_services.activate(db, user_id=user.id, service=service.key, channel=channel)
+    # الصفحة المربوطة = مصنع خاص بها يملك مكتبتها وفيديوهاتها (يُنشأ هنا، أو يُستعاد إن سبق ربطها)
+    customer_workspaces.ensure_workspace(db, user_id=user.id, channel=channel)
     return True
+
+
+async def _long_lived_token(client: httpx.AsyncClient, user_token: str) -> str:
+    """يبدّل توكن المستخدم القصير (ساعة تقريباً) بتوكن طويل العمر. توكنات الصفحات تُستخرج منه، وبدونه
+    ينتهي توكن الصفحة المحفوظ بعد ساعة فيفشل النشر عليها لاحقاً. إن تعذّر التبديل يُكمل الربط بالتوكن القصير."""
+    try:
+        data = await _graph_get(
+            client, "oauth/access_token", grant_type="fb_exchange_token",
+            client_id=settings.META_APP_ID, client_secret=settings.META_APP_SECRET,
+            fb_exchange_token=user_token,
+        )
+    except HTTPException:
+        logger.warning("Facebook long-lived token exchange failed; page tokens will be short-lived")
+        return user_token
+    return data.get("access_token") or user_token
 
 
 @router.get("/facebook/callback")
@@ -327,6 +346,7 @@ async def facebook_callback(
         user_token = token_data.get("access_token")
         if not user_token:
             raise HTTPException(status_code=502, detail="Facebook لم يُرجع user_token")
+        user_token = await _long_lived_token(client, user_token)
         owner = await _graph_get(
             client, "me", fields="id,name,email", access_token=user_token
         )

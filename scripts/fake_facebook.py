@@ -14,11 +14,16 @@
     "granted": الأذونات التي «منحها» المستخدم (احذف واحداً لتجربة missing_permissions)
     "pages":   الصفحات التي «اختارها» (واحدة = ربط مباشر، عدة = صفحة الاختيار، لا شيء = no_pages)
     "deny":    true لتجربة رفض المستخدم للنافذة (access_denied)
+    "publish_error": نص خطأ لتجربة فشل النشر، مثل "(#190) Error validating access token" (اختياري)
+
+النشر على الصفحة مقلَّد أيضاً: لا يخرج أي طلب، وينجح بعد ثوانٍ بمعرّف وهمي (أو يفشل بـ publish_error).
 
 قاعدة البيانات: نسخة مستقلة fake_facebook.db (تُنسخ من hojrat_bladi.db أول مرة) كي لا تختلط
 صفحات التجربة ببيانات التطوير. احذف الملف للبدء من جديد.
 """
 import argparse
+import asyncio
+import itertools
 import json
 import os
 import shutil
@@ -63,6 +68,22 @@ async def _fake_graph_get(client, path, **params):
     raise RuntimeError(f"طلب Graph غير متوقع في خادم التقليد: {path}")
 
 
+_fake_ids = itertools.count(1)
+
+
+async def _fake_publish_call(client, method, path, *, token, data=None, params=None):
+    """بديل graph_call داخل محوّل فيسبوك: نشر وهمي بلا أي طلب خارجي."""
+    from app.models import ReportKind
+    from app.services.social.base import PublishError
+
+    print(f"[fake-facebook] نشر مقلَّد: {method} {path} | الرابط: {(data or {}).get('file_url') or (data or {}).get('url')}")
+    await asyncio.sleep(4)
+    error = _scenario().get("publish_error")
+    if error:
+        raise PublishError(ReportKind.TOKEN if "#190" in error else ReportKind.UNKNOWN, error)
+    return {"id": f"99000000{next(_fake_ids):04d}"}
+
+
 class _OfflineClient:
     """بديل httpx.AsyncClient داخل routers/auth: لا يخرج أي طلب إلى فيسبوك."""
 
@@ -88,11 +109,14 @@ def build_app():
 
     from app.main import app
     from app.routers import auth
+    from app.services.social import facebook as facebook_publisher
 
     auth._graph_get = _fake_graph_get
     auth.httpx = types.SimpleNamespace(
         AsyncClient=_OfflineClient, HTTPError=httpx.HTTPError, Response=httpx.Response,
     )
+
+    facebook_publisher.graph_call = _fake_publish_call
 
     @app.middleware("http")
     async def fake_dialog(request, call_next):

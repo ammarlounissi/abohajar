@@ -343,7 +343,7 @@ async def _publish_to_channel(publishers: Dict[str, Publisher], channel: models.
     if problem:
         result = PublishResult(platform, False, error=problem.message, kind=problem.kind)
     else:
-        publisher = publishers[platform].for_channel(channel.remote_id)
+        publisher = publishers[platform].for_channel(channel.remote_id, channel.page_access_token)
         try:
             result = await publisher.publish(post)
         except PublishError as exc:
@@ -453,7 +453,9 @@ async def publish_due(
                 channel = delivery.channel
                 problem = _channel_problem(publishers, channel)
                 if problem is None:
-                    problem = publishers[channel.platform].for_channel(channel.remote_id).validate(view_for(post, delivery))
+                    problem = publishers[channel.platform].for_channel(
+                        channel.remote_id, channel.page_access_token,
+                    ).validate(view_for(post, delivery))
                 results.append(PublishResult(
                     channel.platform, problem is None, error=problem.message if problem else None,
                     kind=problem.kind if problem else None, channel_id=channel.id, channel_label=channel.label,
