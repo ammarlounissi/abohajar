@@ -23,7 +23,8 @@
   (`npm install --package-lock-only`، لم تُثبَّت محلياً).
 - **على السيرفر قبل التجربة**: `alembic upgrade head` · في `.env` الخلفية `REMOTION_DIR=<مسار ikhlasdz>`
   (واختيارياً `NODE_BIN` و`REMOTION_CONCURRENCY` وفي بيئة العامل `REMOTION_BROWSER_EXECUTABLE`) · في ikhlasdz `npm install`
-  ثم `npx remotion browser ensure` · إعادة تشغيل `hadjret-video-worker`.
+  ثم `node -e "require('@remotion/renderer').ensureBrowser()"` (لا `npx remotion`: لا يوجد @remotion/cli) ·
+  إعادة تشغيل `hadjret-video-worker`.
 
 ## الخلفية (FastAPI)
 - [x] Schema مكتوب (`CustomerVideoTemplateOption`، `image_ids` في `CustomerVideoRequest`)
