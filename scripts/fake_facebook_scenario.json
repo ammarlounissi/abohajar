@@ -1,0 +1,14 @@
+{
+  "deny": false,
+  "granted": [
+    "pages_show_list",
+    "pages_manage_posts",
+    "pages_read_engagement",
+    "pages_manage_engagement"
+  ],
+  "pages": [
+    {"id": "700000000001", "name": "متجر الإخلاص", "access_token": "fake-page-token-1"},
+    {"id": "700000000002", "name": "حجرة بلادي للتجربة", "access_token": "fake-page-token-2"},
+    {"id": "700000000003", "name": "صفحة ثالثة", "access_token": "fake-page-token-3"}
+  ]
+}
