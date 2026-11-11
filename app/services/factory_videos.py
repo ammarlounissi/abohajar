@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.core.config import settings
-from app.services import media, media_library, video_maker
+from app.services import media, media_library, remotion_render, video_maker
 from app.services.errors import InvalidInputError, NotFoundError
 from app.services.factories import get_factory
 
@@ -177,7 +177,11 @@ def generate_factory_video(
     template_id: str,
     duration: Optional[float],
     audio: Optional[str],
+    image_ids: Optional[List[int]] = None,
+    engine: Optional[str] = None,
 ) -> FactoryVideoResult:
+    """image_ids: صور المكتبة بهذا الترتيب (ما ظهر في معاينة الزبون)؛ ما حُذف منها بعد الطلب يُتخطّى.
+    engine: remotion يرندر بمكوّن ProductReel، وغيره ffmpeg."""
     template, selected_duration, selected_audio = validate_factory_video_request(
         db, factory_id, source=source, sku=sku, template_id=template_id,
         duration=duration, audio=audio,
@@ -212,7 +216,14 @@ def generate_factory_video(
     if source != "library":
         raise InvalidInputError("مصدر الصور غير معروف")
     image_entries = _library_image_entries(db, factory_id)
-    selected_entries = random.sample(image_entries, len(image_entries))
+    if image_ids:
+        by_id = {entry.id: entry for entry in image_entries}
+        selected_entries = [by_id[media_id] for media_id in image_ids if media_id in by_id]
+        if not selected_entries:
+            raise NotFoundError("حُذفت الصور المختارة لهذا الفيديو من المكتبة؛ اطلبه من جديد")
+    else:
+        selected_entries = random.sample(image_entries, len(image_entries))
+    render = remotion_render.render_video_file if engine == "remotion" else video_maker.render_video_file
     directory = media_library.library_dir(factory_id)
     directory.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.mp4"
@@ -246,7 +257,7 @@ def generate_factory_video(
             raise video_maker.VideoRenderError(
                 "تعذّر استخدام الصور المسجلة في مكتبة المصنع؛ تحقق من الروابط وملفات الصور"
             )
-        size = video_maker.render_video_file(
+        size = render(
             selected_images, temporary, duration=selected_duration, audio=audio_path,
             max_bytes=media_library.MAX_UPLOAD_BYTES, template=template,
         )

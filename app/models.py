@@ -266,6 +266,10 @@ class FactoryVideoJob(Base):
     template = Column(String(40), nullable=False)
     duration = Column(Float, nullable=False)
     audio = Column(String(120), nullable=True)
+    # صور المكتبة المختارة بترتيبها (معرّفات media) كما ظهرت في معاينة الزبون. فارغ: اختيار عشوائي عند التوليد.
+    image_ids = Column(JSON, nullable=True)
+    # محرك الرندرة: remotion أو ffmpeg. فارغ = ffmpeg (المهام الأقدم ومهام الإدارة).
+    engine = Column(String(20), nullable=True)
     status = Column(String(20), nullable=False, default="queued", index=True)
     video_url = Column(String(2000), nullable=True)
     size_bytes = Column(Integer, nullable=True)

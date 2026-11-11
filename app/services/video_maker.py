@@ -78,6 +78,22 @@ VIDEO_TEMPLATES = (
 VIDEO_TEMPLATES_BY_ID = {template.id: template for template in VIDEO_TEMPLATES}
 DEFAULT_FACTORY_TEMPLATE = "cinematic_30"
 
+# مقدار التكبير لكل حركة (0.08 = تكبير 8% على طول اللقطة)، والحركات التي تنزلق أفقياً أثناء التكبير.
+MOTION_ZOOM = {"cinematic": 0.08, "fast": 0.18, "detail": 0.25, "showcase": 0.12}
+PANNING_MOTIONS = ("fast", "showcase")
+
+
+def template_spec(template: VideoTemplate) -> dict:
+    """إعدادات القالب كما يرسمها مكوّن Remotion (ProductReel في مشروع الواجهة) للمعاينة والرندرة.
+    المصدر الوحيد للقيم هنا؛ الواجهة لا تحمل جدولاً خاصاً بها."""
+    return {
+        "zoom": MOTION_ZOOM[template.motion],
+        "pan": template.motion in PANNING_MOTIONS,
+        "transition": template.transition,
+        "crossfade": template.crossfade,
+        "card": template.card,
+    }
+
 
 def get_video_template(template_id: str) -> VideoTemplate:
     template = VIDEO_TEMPLATES_BY_ID.get(template_id)
@@ -188,15 +204,15 @@ def build_filter_graph(
             )
         parts.append(compose)
         motion = template.motion if template else "cinematic"
-        amount = {"cinematic": 0.08, "fast": 0.18, "detail": 0.25, "showcase": 0.12}[motion]
+        amount = MOTION_ZOOM[motion]
         step = amount / frames
         zoom = (
             f"min(1.0+{step:.6f}*on,{1 + amount:.2f})"
             if i % 2 == 0 else f"max({1 + amount:.2f}-{step:.6f}*on,1.0)"
         )
-        if motion in ("fast", "showcase") and i % 2 == 0:
+        if motion in PANNING_MOTIONS and i % 2 == 0:
             x_position = f"max(0,min(iw-iw/zoom,(iw-iw/zoom)*on/{frames}))"
-        elif motion in ("fast", "showcase"):
+        elif motion in PANNING_MOTIONS:
             x_position = f"max(0,min(iw-iw/zoom,(iw-iw/zoom)*(1-on/{frames})))"
         else:
             x_position = "iw/2-(iw/zoom/2)"

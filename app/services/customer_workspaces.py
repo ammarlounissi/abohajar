@@ -168,7 +168,7 @@ def delete_media(db: Session, user_id: int, service_key: str, media_id: int) -> 
     media_library.delete_factory_media(db, workspace.factory_id, media_id)
 
 
-# ───── توليد الفيديو من صور المكتبة (محرك ffmpeg وطابور factory_video_jobs كما هما) ─────
+# ───── توليد الفيديو من صور المكتبة (طابور factory_video_jobs، والمحرك CUSTOMER_VIDEO_ENGINE) ─────
 
 def _active_job(db: Session, factory_id: int) -> Optional[models.FactoryVideoJob]:
     return (
@@ -186,7 +186,11 @@ def video_options(db: Session, user_id: int, service_key: str) -> dict:
     workspace = current_workspace(db, user_id, service_key)
     options = factory_videos.get_video_options(db, workspace.factory_id)
     return {
-        "templates": options["templates"],
+        # مع إعدادات الحركة والانتقال التي يرسم بها مكوّن المعاينة (ProductReel) القالب
+        "templates": [
+            {**item, **video_maker.template_spec(video_maker.get_video_template(item["id"]))}
+            for item in options["templates"]
+        ],
         "default_template": options["default_template"],
         "audio_files": options["audio_files"],
         "images_count": options["library_images_count"],
@@ -195,26 +199,58 @@ def video_options(db: Session, user_id: int, service_key: str) -> dict:
     }
 
 
+def _check_image_ids(db: Session, factory_id: int, image_ids: List[int], max_images: int) -> None:
+    """الصور المختارة: من صور مكتبة هذه الصفحة، بلا تكرار، وبحد القالب."""
+    if len(set(image_ids)) != len(image_ids):
+        raise InvalidInputError("الصورة الواحدة تُختار مرة واحدة")
+    if len(image_ids) > max_images:
+        raise InvalidInputError(f"هذا القالب يأخذ {max_images} صورة على الأكثر")
+    found = (
+        db.query(models.Media.id)
+        .filter(
+            models.Media.factory_id == factory_id,
+            models.Media.media_type == "image",
+            models.Media.id.in_(image_ids),
+        )
+        .count()
+    )
+    if found != len(image_ids):
+        raise NotFoundError("بعض الصور المختارة غير موجودة في مكتبتك؛ حدّث الصفحة واختر من جديد")
+
+
 def request_video(
     db: Session, user_id: int, service_key: str, *, template: Optional[str], audio: Optional[str],
+    image_ids: Optional[List[int]] = None,
 ) -> models.FactoryVideoJob:
     """يضع في الطابور فيديو من صور مكتبة الصفحة. مهمة واحدة جارية لكل صفحة، وبسقف لعدد الفيديوهات.
-    بلا صوت محدد يُختار صوت عشوائي من المتاح."""
+    بلا صوت محدد يُختار صوت عشوائي من المتاح. image_ids: الصور بترتيب المعاينة (بدونها: اختيار عشوائي).
+    المحرك من CUSTOMER_VIDEO_ENGINE ويُحفظ مع المهمة."""
     workspace = current_workspace(db, user_id, service_key)
     factory_id = workspace.factory_id
+    selected_template = video_maker.get_video_template(template or video_maker.DEFAULT_FACTORY_TEMPLATE)
     if _active_job(db, factory_id) is not None:
         raise InvalidInputError("يوجد فيديو قيد التوليد لهذه الصفحة. انتظر اكتماله ثم اطلب غيره.")
     if _count(db, factory_id, "image") == 0:
         raise InvalidInputError("ارفع صوراً إلى المكتبة أولاً ليُبنى منها الفيديو")
     if _count(db, factory_id, "video") >= MAX_VIDEOS:
         raise InvalidInputError(f"بلغت الحد الأقصى لعدد الفيديوهات ({MAX_VIDEOS}). احذف فيديو لتولّد غيره.")
+    if image_ids:
+        _check_image_ids(db, factory_id, image_ids, selected_template.max_images)
     if audio is None:
         audio_files = video_maker.list_audio_files()
         audio = random.choice(audio_files) if audio_files else None
+    engine = "remotion" if settings.CUSTOMER_VIDEO_ENGINE == "remotion" else "ffmpeg"
     return factory_video_jobs.enqueue_video_job(
         db, factory_id, source="library", sku=None,
-        template=template or video_maker.DEFAULT_FACTORY_TEMPLATE, duration=None, audio=audio,
+        template=selected_template.id, duration=None, audio=audio,
+        image_ids=image_ids or None, engine=engine,
     )
+
+
+def audio_file(db: Session, user_id: int, service_key: str, name: str) -> Path:
+    """ملف صوت من المتاح للتوليد، لمعاينة الفيديو في اللوحة. لصاحب صفحة مربوطة فقط."""
+    current_workspace(db, user_id, service_key)
+    return video_maker.resolve_audio(name)
 
 
 def list_video_jobs(db: Session, user_id: int, service_key: str, *, limit: int = 10) -> List[models.FactoryVideoJob]:

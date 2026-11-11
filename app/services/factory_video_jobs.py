@@ -2,7 +2,7 @@
 import logging
 import random
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -27,7 +27,10 @@ def enqueue_video_job(
     template: str,
     duration: Optional[float],
     audio: Optional[str],
+    image_ids: Optional[List[int]] = None,
+    engine: Optional[str] = None,
 ) -> models.FactoryVideoJob:
+    """image_ids: صور المكتبة بترتيبها (مصدر library فقط، تحققها على المستدعي). engine: remotion أو ffmpeg."""
     selected_template, selected_duration, selected_audio = (
         factory_videos.validate_factory_video_request(
             db, factory_id, source=source, sku=sku, template_id=template,
@@ -41,6 +44,8 @@ def enqueue_video_job(
         template=selected_template.id,
         duration=selected_duration,
         audio=selected_audio,
+        image_ids=list(image_ids) if image_ids else None,
+        engine=engine,
         status="queued",
     )
     db.add(job)
@@ -115,6 +120,8 @@ def process_video_job(job_id: int, session_factory: SessionFactory = SessionLoca
             "template_id": job.template,
             "duration": job.duration,
             "audio": job.audio,
+            "image_ids": job.image_ids,
+            "engine": job.engine,
         }
 
     try:

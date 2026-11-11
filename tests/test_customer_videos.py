@@ -5,7 +5,7 @@ from unittest import mock
 
 from app import models
 from app.core.config import settings
-from app.services import customer_workspaces, errors, factory_video_jobs, media_library
+from app.services import customer_workspaces, errors, factory_video_jobs, media_library, video_maker
 from tests.test_customer_workspace import BASE, WorkspaceTestBase
 
 
@@ -16,16 +16,18 @@ class CustomerVideoTests(WorkspaceTestBase):
         audio_root.mkdir()
         (audio_root / "a.mp3").write_bytes(b"audio")
         (audio_root / "z.wav").write_bytes(b"audio")
+        self.rendered = []   # الصور التي وصلت إلى المحرك في كل رندرة، بترتيبها
         for patcher in (
             mock.patch.object(settings, "AUDIO_ROOT", audio_root),
+            mock.patch.object(settings, "CUSTOMER_VIDEO_ENGINE", "ffmpeg"),
             mock.patch("app.services.video_maker.ffmpeg_tools.find_tool", return_value="/usr/bin/ffmpeg"),
             mock.patch("app.services.video_maker._run_ffmpeg", side_effect=self._write_video),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    @staticmethod
-    def _write_video(_ffmpeg, _images, _duration, _fit, _crf, output, _audio, _template):
+    def _write_video(self, _ffmpeg, images, _duration, _fit, _crf, output, _audio, _template):
+        self.rendered.append([image.name for image in images])
         output.write_bytes(b"generated-video")
 
     def run_worker_once(self):
@@ -46,7 +48,7 @@ class CustomerVideoTests(WorkspaceTestBase):
 
     def test_requires_login_and_a_linked_page(self):
         for method, path in (("get", "/videos/options"), ("post", "/videos"), ("get", "/videos/jobs"),
-                             ("get", "/videos/jobs/1")):
+                             ("get", "/videos/jobs/1"), ("get", "/videos/audio/a.mp3")):
             with self.subTest(path=path):
                 kwargs = {"json": {}} if method == "post" else {}
                 self.assertEqual(getattr(self.client(), method)(f"{BASE}{path}", **kwargs).status_code, 401)
@@ -62,7 +64,13 @@ class CustomerVideoTests(WorkspaceTestBase):
         self.assertEqual(body["audio_files"], ["a.mp3", "z.wav"])
         ids = [template["id"] for template in body["templates"]]
         self.assertIn(body["default_template"], ids)
-        self.assertEqual(set(body["templates"][0]), {"id", "name", "duration", "max_images"})
+        self.assertEqual(
+            set(body["templates"][0]),
+            {"id", "name", "duration", "max_images", "zoom", "pan", "transition", "crossfade", "card"},
+        )
+        for item in body["templates"]:
+            spec = video_maker.template_spec(video_maker.get_video_template(item["id"]))
+            self.assertEqual({key: item[key] for key in spec}, spec)
         self.assertNotIn("factory_id", body)
         self.assertNotIn("products", body)
 
@@ -156,6 +164,95 @@ class CustomerVideoTests(WorkspaceTestBase):
             res = client.post(f"{BASE}/videos", json={})
             self.assertEqual(res.status_code, 422)
             self.assertIn("الحد الأقصى", res.json()["detail"])
+
+    # ───── المعاينة: الصور المختارة بترتيبها، والصوت ─────
+
+    def images_of(self, client):
+        """صور المكتبة: (المعرّف، اسم الملف) الأحدث أولاً."""
+        return [(item["id"], item["url"].rsplit("/", 1)[-1]) for item in client.get(f"{BASE}/media?media_type=image").json()]
+
+    def test_chosen_images_are_rendered_in_the_preview_order(self):
+        client = self.ready_client()
+        self.upload(client, "b.png")
+        self.upload(client, "c.png")
+        images = self.images_of(client)
+        chosen = [images[2], images[0]]   # الأقدم ثم الأحدث، وتُترك الوسطى
+        res = client.post(f"{BASE}/videos", json={"template": "quick_7", "image_ids": [i for i, _ in chosen]})
+        self.assertEqual(res.status_code, 202, res.text)
+        self.run_worker_once()
+        self.assertEqual(self.rendered, [[name for _, name in chosen]])
+        done = client.get(f"{BASE}/videos/jobs/{res.json()['id']}").json()
+        self.assertEqual((done["status"], done["images_used"]), ("succeeded", 2))
+
+    def test_images_deleted_after_the_request_are_skipped(self):
+        client = self.ready_client()
+        self.upload(client, "b.png")
+        (first, _), (second, second_name) = self.images_of(client)
+        job = client.post(f"{BASE}/videos", json={"image_ids": [first, second]}).json()
+        client.delete(f"{BASE}/media/{first}")
+        self.run_worker_once()
+        self.assertEqual(self.rendered, [[second_name]])
+
+        client.post(f"{BASE}/videos", json={"image_ids": [second]})
+        client.delete(f"{BASE}/media/{second}")
+        self.upload(client, "new.png")   # المكتبة ليست فارغة، لكن المختارة حُذفت كلها
+        self.run_worker_once()
+        failed = client.get(f"{BASE}/videos/jobs").json()[0]
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("حُذفت الصور المختارة", failed["error"])
+        self.assertNotEqual(failed["id"], job["id"])
+
+    def test_rejects_image_choices_outside_the_page_library(self):
+        mine = self.ready_client(1, "111")
+        other = self.ready_client(2, "222")
+        mine_id = self.images_of(mine)[0][0]
+        other_id = self.images_of(other)[0][0]
+        res = mine.post(f"{BASE}/videos", json={"image_ids": [mine_id, other_id]})
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(mine.post(f"{BASE}/videos", json={"image_ids": [mine_id, mine_id]}).status_code, 422)
+        self.assertEqual(mine.post(f"{BASE}/videos", json={"image_ids": []}).status_code, 422)
+        videos = mine.post(f"{BASE}/videos", json={"template": "quick_7", "image_ids": list(range(1, 8))})
+        self.assertEqual(videos.status_code, 422)   # quick_7 يأخذ 6 صور على الأكثر
+        self.assertIn("6", videos.json()["detail"])
+        with self.Session() as db:
+            self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
+
+    def test_audio_is_served_to_the_page_owner_for_preview(self):
+        client = self.ready_client()
+        res = client.get(f"{BASE}/videos/audio/z.wav")
+        self.assertEqual((res.status_code, res.content), (200, b"audio"))
+        self.assertIn("private", res.headers["cache-control"])
+        self.assertEqual(client.get(f"{BASE}/videos/audio/missing.mp3").status_code, 404)
+        self.assertEqual(client.get(f"{BASE}/videos/audio/notes.txt").status_code, 422)
+        self.assertEqual(client.get(f"{BASE}/videos/audio/..%2Fa.mp3").status_code, 404)
+
+    # ───── المحرك ─────
+
+    def test_engine_is_saved_with_the_job_and_remotion_renders_it(self):
+        client = self.ready_client()
+        with mock.patch.object(settings, "CUSTOMER_VIDEO_ENGINE", "remotion"):
+            job = client.post(f"{BASE}/videos", json={"template": "cards_15", "audio": "a.mp3"}).json()
+        with self.Session() as db:
+            self.assertEqual(db.get(models.FactoryVideoJob, job["id"]).engine, "remotion")
+
+        def remotion(images, output, *, duration, audio, max_bytes, template, fit="blur"):
+            self.assertEqual((duration, template.id, audio.name), (15, "cards_15", "a.mp3"))
+            output.write_bytes(b"remotion-video")
+            return output.stat().st_size
+
+        with mock.patch("app.services.factory_videos.remotion_render.render_video_file", side_effect=remotion) as render:
+            self.run_worker_once()
+        render.assert_called_once()
+        self.assertEqual(self.rendered, [])   # ffmpeg لم يُستدعَ
+        self.assertEqual(client.get(f"{BASE}/videos/jobs/{job['id']}").json()["status"], "succeeded")
+
+    def test_ffmpeg_engine_setting_keeps_ffmpeg(self):
+        client = self.ready_client()
+        job = client.post(f"{BASE}/videos", json={}).json()
+        with self.Session() as db:
+            self.assertEqual(db.get(models.FactoryVideoJob, job["id"]).engine, "ffmpeg")
+        self.run_worker_once()
+        self.assertEqual(len(self.rendered), 1)
 
     # ───── العزل ─────
 
