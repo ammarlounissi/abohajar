@@ -410,6 +410,33 @@ class SocialChannelResponse(BaseModel):
     created_at: datetime
 
 
+# --- خدمات Facebook Login ---
+class FacebookServicePage(BaseModel):
+    """صفحة فيسبوك التي تعمل عليها خدمة المستخدم. بلا أي توكن."""
+    page_id: str
+    page_name: str
+    is_active: bool
+
+
+class FacebookPageCandidate(BaseModel):
+    page_id: str
+    page_name: str
+
+
+class FacebookServiceStatus(BaseModel):
+    """حالة خدمة تعمل عبر Facebook Login للمستخدم الحالي.
+    page: الصفحة المربوطة (واحدة فقط) أو null. candidates: صفحات تنتظر أن يختار منها واحدة."""
+    service: str
+    name: str
+    scopes: List[str]
+    page: Optional[FacebookServicePage] = None
+    candidates: List[FacebookPageCandidate] = []
+
+
+class FacebookPageSelection(BaseModel):
+    page_id: str = Field(min_length=1, max_length=100)
+
+
 # --- المنتجات ---
 class ProductBase(BaseModel):
     sku: str = Field(pattern=SKU_PATTERN)

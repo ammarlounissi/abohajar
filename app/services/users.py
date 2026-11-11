@@ -167,6 +167,11 @@ def remove_facebook_identity(db: Session, facebook_id: str) -> None:
     """تنفيذ طلب حذف البيانات من فيسبوك: من له بريد وكلمة سر يبقى حسابه بلا فيسبوك، وغيره يُحذف.
     قنواته تُحذف قبل ذلك (انظر social_channels.delete_by_owner_fbid) وما تبقى منها يُفكّ ربطه."""
     user = db.query(models.User).filter(models.User.facebook_id == facebook_id).first()
+    if user is not None:
+        # ارتباطات الخدمات قائمة على تصريح فيسبوك (وقد تحمل توكناً مؤقتاً): تزول معه في الحالتين
+        db.query(models.ServiceConnection).filter(models.ServiceConnection.user_id == user.id).delete(
+            synchronize_session=False
+        )
     if user is None:
         pass
     elif user.email and user.password_hash:
