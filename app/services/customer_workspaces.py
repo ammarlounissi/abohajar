@@ -8,6 +8,7 @@
 
 اتفاقية الحفظ: ensure_workspace لا تنفّذ commit (تُستدعى ضمن ربط الصفحة)؛ بقية الدوال تحفظ بنفسها."""
 import io
+import random
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
@@ -16,13 +17,16 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.models import FactoryKind
-from app.services import facebook_services, media_library
+from app.services import facebook_services, factory_video_jobs, factory_videos, media_library, video_maker
 from app.services.errors import ConflictError, InvalidInputError
 
 # حدود رفع الزبون. الصورة الواحدة بحد ما يقبله مولّد الفيديو (factory_videos.MAX_LIBRARY_IMAGE_*).
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 50_000_000
 MAX_IMAGES = 200
+# الفيديو المولَّد يُحفظ في المكتبة نفسها (حتى 100 ميغابايت للواحد)، فلعددها سقف: يحذف الزبون ليولّد غيرها.
+MAX_VIDEOS = 20
+_ACTIVE_JOB_STATUSES = ("queued", "running")
 # امتداد الملف -> الصيغة التي يجب أن يكون عليها محتواه فعلاً (كما يتعرّف عليها Pillow).
 IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}
 
@@ -149,3 +153,70 @@ def delete_media(db: Session, user_id: int, service_key: str, media_id: int) -> 
     """يحذف وسيطاً من مكتبة صفحة الزبون فقط (NotFoundError لما ليس فيها)."""
     workspace = current_workspace(db, user_id, service_key)
     media_library.delete_factory_media(db, workspace.factory_id, media_id)
+
+
+# ───── توليد الفيديو من صور المكتبة (محرك ffmpeg وطابور factory_video_jobs كما هما) ─────
+
+def _active_job(db: Session, factory_id: int) -> Optional[models.FactoryVideoJob]:
+    return (
+        db.query(models.FactoryVideoJob)
+        .filter(
+            models.FactoryVideoJob.factory_id == factory_id,
+            models.FactoryVideoJob.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .first()
+    )
+
+
+def video_options(db: Session, user_id: int, service_key: str) -> dict:
+    """ما يختار منه الزبون قبل التوليد: القوالب والأصوات، مع عدد صوره وفيديوهاته وسقفها."""
+    workspace = current_workspace(db, user_id, service_key)
+    options = factory_videos.get_video_options(db, workspace.factory_id)
+    return {
+        "templates": options["templates"],
+        "default_template": options["default_template"],
+        "audio_files": options["audio_files"],
+        "images_count": options["library_images_count"],
+        "videos_count": _count(db, workspace.factory_id, "video"),
+        "max_videos": MAX_VIDEOS,
+    }
+
+
+def request_video(
+    db: Session, user_id: int, service_key: str, *, template: Optional[str], audio: Optional[str],
+) -> models.FactoryVideoJob:
+    """يضع في الطابور فيديو من صور مكتبة الصفحة. مهمة واحدة جارية لكل صفحة، وبسقف لعدد الفيديوهات.
+    بلا صوت محدد يُختار صوت عشوائي من المتاح."""
+    workspace = current_workspace(db, user_id, service_key)
+    factory_id = workspace.factory_id
+    if _active_job(db, factory_id) is not None:
+        raise InvalidInputError("يوجد فيديو قيد التوليد لهذه الصفحة. انتظر اكتماله ثم اطلب غيره.")
+    if _count(db, factory_id, "image") == 0:
+        raise InvalidInputError("ارفع صوراً إلى المكتبة أولاً ليُبنى منها الفيديو")
+    if _count(db, factory_id, "video") >= MAX_VIDEOS:
+        raise InvalidInputError(f"بلغت الحد الأقصى لعدد الفيديوهات ({MAX_VIDEOS}). احذف فيديو لتولّد غيره.")
+    if audio is None:
+        audio_files = video_maker.list_audio_files()
+        audio = random.choice(audio_files) if audio_files else None
+    return factory_video_jobs.enqueue_video_job(
+        db, factory_id, source="library", sku=None,
+        template=template or video_maker.DEFAULT_FACTORY_TEMPLATE, duration=None, audio=audio,
+    )
+
+
+def list_video_jobs(db: Session, user_id: int, service_key: str, *, limit: int = 10) -> List[models.FactoryVideoJob]:
+    """آخر مهام التوليد لصفحة الزبون، الأحدث أولاً."""
+    workspace = current_workspace(db, user_id, service_key)
+    return (
+        db.query(models.FactoryVideoJob)
+        .filter(models.FactoryVideoJob.factory_id == workspace.factory_id)
+        .order_by(models.FactoryVideoJob.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_video_job(db: Session, user_id: int, service_key: str, job_id: int) -> models.FactoryVideoJob:
+    """مهمة من مهام صفحة الزبون فقط (NotFoundError لغيرها)."""
+    workspace = current_workspace(db, user_id, service_key)
+    return factory_video_jobs.get_video_job(db, workspace.factory_id, job_id)

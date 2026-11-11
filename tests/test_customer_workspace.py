@@ -33,7 +33,9 @@ def image_bytes(image_format="PNG", size=(40, 30)) -> bytes:
     return buffer.getvalue()
 
 
-class CustomerWorkspaceTests(unittest.TestCase):
+class WorkspaceTestBase(unittest.TestCase):
+    """تطبيق بمسارات الزبون وقاعدة في الذاكرة ومستخدمان (1 و2). تستعمله اختبارات المكتبة والفيديو."""
+
     def setUp(self):
         engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         Base.metadata.create_all(engine)
@@ -109,6 +111,9 @@ class CustomerWorkspaceTests(unittest.TestCase):
         with self.Session() as db:
             row = db.query(models.CustomerWorkspace).filter_by(user_id=user_id, page_id=page_id).one()
             return row.factory_id
+
+
+class CustomerWorkspaceTests(WorkspaceTestBase):
 
     # ───── الوصول ─────
 

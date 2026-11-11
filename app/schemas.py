@@ -462,6 +462,43 @@ class CustomerMediaResponse(BaseModel):
     description: Optional[str] = None
 
 
+class CustomerVideoOptions(BaseModel):
+    """ما يختار منه الزبون قبل توليد فيديو من صور مكتبته."""
+    templates: List[FactoryVideoTemplateOption]
+    default_template: str
+    audio_files: List[str]
+    images_count: int
+    videos_count: int
+    max_videos: int
+
+
+class CustomerVideoRequest(BaseModel):
+    """طلب فيديو من صور المكتبة. بلا قالب: القالب الافتراضي. بلا صوت: صوت عشوائي من المتاح."""
+    template: Optional[str] = Field(default=None, min_length=1, max_length=40)
+    audio: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("template", "audio", mode="before")
+    @classmethod
+    def strip_text(cls, value):
+        return (value.strip() or None) if isinstance(value, str) else value
+
+
+class CustomerVideoJob(BaseModel):
+    """مهمة توليد فيديو لصفحة الزبون. video_url يُملأ عند النجاح، وerror عند الفشل."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    status: Literal["queued", "running", "succeeded", "failed"]
+    template: str
+    duration: float
+    audio: Optional[str] = None
+    video_url: Optional[str] = None
+    images_used: Optional[int] = None
+    error: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
 # --- المنتجات ---
 class ProductBase(BaseModel):
     sku: str = Field(pattern=SKU_PATTERN)
