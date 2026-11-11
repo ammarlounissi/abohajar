@@ -304,6 +304,28 @@ class SocialChannel(Base):
         return f"{self.platform}:{self.remote_id}"
 
 
+class ServiceConnection(Base):
+    """ربط مستخدم بخدمة تعمل عبر Facebook Login (انظر services/facebook_services.py).
+    صف واحد لكل (مستخدم، خدمة): الخدمة تعمل على صفحة واحدة فقط هي channel_id.
+    حقول pending_* مؤقتة: تُملأ حين يمنح المستخدم أكثر من صفحة في نافذة فيسبوك، وتُمحى فور اختياره
+    واحدة أو بانتهاء المهلة. لا تُحفظ توكنات الصفحات غير المختارة، بل توكن المستخدم وحده وإلى حين."""
+    __tablename__ = "service_connections"
+    __table_args__ = (UniqueConstraint("user_id", "service", name="uq_service_connections_user_service"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    service = Column(String(50), nullable=False)
+    channel_id = Column(Integer, ForeignKey("social_channels.id"), nullable=True, index=True)
+    pending_pages = Column(Text, nullable=True)        # JSON: [{"id": ..., "name": ...}] بلا توكنات
+    pending_user_token = Column(Text, nullable=True)
+    pending_owner_name = Column(String(255), nullable=True)
+    pending_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    channel = relationship("SocialChannel")
+
+
 class Product(Base):
     """المنتجات، متوافقة مع Meta Commerce Graph API"""
     __tablename__ = "products"

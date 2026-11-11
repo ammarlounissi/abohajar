@@ -12,7 +12,7 @@ from app import models
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.routers import auth
-from app.services import sessions
+from app.services import facebook_services, sessions
 
 
 class SessionTests(unittest.TestCase):
@@ -107,32 +107,28 @@ class SessionTests(unittest.TestCase):
             db.commit()
         self.assertEqual(c.get("/auth/me").status_code, 401)
 
-    def test_facebook_callback_links_pages_to_session_user_and_not_to_others(self):
+    def test_facebook_callback_never_takes_a_page_linked_to_another_user(self):
         owner, other = self.client(), self.client()
         id_owner, id_other = self.register(owner, "a@x.com"), self.register(other, "b@x.com")
         self.add_page(id_other, "12345678")      # صفحة يملكها مستخدم آخر
+        scopes = facebook_services.SERVICES["facebook-reels"].scopes
 
         async def fake_get(client, path, **params):
             if path == "me":
                 return {"id": "10", "name": "Owner"}
+            if path == "me/permissions":
+                return {"data": [{"permission": s, "status": "granted"} for s in scopes]}
             if path == "me/accounts":
-                return {"data": [
-                    {"id": "99999999", "name": "Mine", "access_token": "t1"},
-                    {"id": "12345678", "name": "Theirs", "access_token": "t2"},
-                ]}
+                return {"data": [{"id": "12345678", "name": "Theirs", "access_token": "t2"}]}
             return {"access_token": "user"}
 
-        async def fake_post(client, path, *, data):
-            return {"success": True}
-
-        state = auth._make_state(id_owner)
+        state = auth._make_state(id_owner, "facebook-reels")
         owner.cookies.set("hb_oauth", state.split(".")[1])
-        with patch.object(auth, "_graph_get", fake_get), patch.object(auth, "_graph_post", fake_post):
+        with patch.object(auth, "_graph_get", fake_get):
             res = owner.get(f"/auth/facebook/callback?code=c&state={state}")
-        self.assertEqual(res.status_code, 200, res.text)
-        self.assertEqual([p["page_id"] for p in res.json()["pages"]], ["99999999"])
-        self.assertEqual(len(res.json()["subscription_errors"]), 1)
-        self.assertEqual([p["page_id"] for p in owner.get("/auth/facebook/status").json()["pages"]], ["99999999"])
+        self.assertEqual(res.status_code, 409, res.text)
+        self.assertEqual(res.json()["reason"], "page_in_use")
+        self.assertEqual(owner.get("/auth/facebook/status").json()["pages"], [])
         self.assertEqual([p["page_id"] for p in other.get("/auth/facebook/status").json()["pages"]], ["12345678"])
 
     def test_delete_page_only_own(self):

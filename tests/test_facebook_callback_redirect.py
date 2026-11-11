@@ -11,6 +11,9 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.routers import auth
+from app.services import facebook_services
+
+SERVICE = facebook_services.SERVICES["facebook-reels"]
 
 
 class CallbackRedirectTests(unittest.TestCase):
@@ -46,20 +49,36 @@ class CallbackRedirectTests(unittest.TestCase):
         async def fake_get(client, path, **params):
             if path == "me":
                 return {"id": "10", "name": "Owner"}
+            if path == "me/permissions":
+                return {"data": [{"permission": s, "status": "granted"} for s in SERVICE.scopes]}
             if path == "me/accounts":
                 return {"data": [{"id": "12345678", "name": "Page", "access_token": "tok"}]}
             return {"access_token": "user"}
 
-        async def fake_post(client, path, *, data):
-            return {"success": True}
-
-        with patch.object(auth, "_graph_get", fake_get), patch.object(auth, "_graph_post", fake_post):
-            state = auth._make_state()
+        with patch.object(auth, "_graph_get", fake_get):
+            state = auth._make_state(service=SERVICE.key)
             self.client.cookies.set("hb_oauth", state.split(".")[1])
             res = self.client.get(f"/auth/facebook/callback?code=c&state={state}")
         self.assertEqual(res.status_code, 303)
         self.assertIn("hb_session=", res.headers.get("set-cookie", ""))
-        self.assertEqual(res.headers["location"], "https://hadjretbladi.com/?facebook=connected&pages=1&errors=0")
+        self.assertEqual(
+            res.headers["location"], "https://hadjretbladi.com/?facebook=connected&service=facebook-reels"
+        )
+
+    def test_login_without_service_links_no_page(self):
+        async def fake_get(client, path, **params):
+            if path == "me":
+                return {"id": "10", "name": "Owner"}
+            if path == "oauth/access_token":
+                return {"access_token": "user"}
+            raise AssertionError(f"طلب غير متوقع بلا خدمة: {path}")
+
+        with patch.object(auth, "_graph_get", fake_get):
+            state = auth._make_state()
+            self.client.cookies.set("hb_oauth", state.split(".")[1])
+            res = self.client.get(f"/auth/facebook/callback?code=c&state={state}")
+        self.assertEqual(res.headers["location"], "https://hadjretbladi.com/?facebook=connected")
+        self.assertIn("hb_session=", res.headers.get("set-cookie", ""))
 
     def test_denied_redirects_with_reason(self):
         res = self.client.get("/auth/facebook/callback?error=access_denied")

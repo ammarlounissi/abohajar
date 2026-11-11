@@ -131,8 +131,20 @@ def delete_channel(db: Session, channel_id: int) -> None:
     channel = get_channel(db, channel_id)
     if db.query(models.PostDelivery).filter(models.PostDelivery.channel_id == channel_id).first():
         raise ConflictError("للقناة منشورات مرتبطة بها: عطّلها (is_active=false) بدل حذفها")
+    _drop_service_connections(db, [channel.id])
     db.delete(channel)
     db.commit()
+
+
+def _drop_service_connections(db: Session, channel_ids: List[int]) -> None:
+    """ارتباطات الخدمات (service_connections) التي تشير إلى قنوات ستُحذف أو تُفكّ. لا commit."""
+    if not channel_ids:
+        return
+    (
+        db.query(models.ServiceConnection)
+        .filter(models.ServiceConnection.channel_id.in_(channel_ids))
+        .delete(synchronize_session=False)
+    )
 
 
 def link_facebook_page(
@@ -183,6 +195,10 @@ def list_user_facebook_pages(db: Session, user_id: int) -> List[models.SocialCha
 
 def delete_by_owner_fbid(db: Session, owner_fbid: str) -> int:
     """يحذف كل قنوات صاحب حساب فيسبوك (طلبا deauthorize/delete من فيسبوك). لا commit."""
+    _drop_service_connections(db, [
+        channel_id for (channel_id,) in
+        db.query(models.SocialChannel.id).filter(models.SocialChannel.owner_fbid == owner_fbid)
+    ])
     return (
         db.query(models.SocialChannel)
         .filter(models.SocialChannel.owner_fbid == owner_fbid)
@@ -213,6 +229,7 @@ def remove_user_facebook_page(db: Session, channel: models.SocialChannel) -> str
     has_deliveries = (
         db.query(models.PostDelivery).filter(models.PostDelivery.channel_id == channel.id).first() is not None
     )
+    _drop_service_connections(db, [channel.id])
     if not has_deliveries:
         db.delete(channel)
         db.commit()
