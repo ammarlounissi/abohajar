@@ -3,19 +3,38 @@
 الواجهة المقابلة: `../ikhlasdz` (Next.js)، ولها `STATUS.md` خاص بها.
 
 ## الميزة الحالية
-- لا ميزة قيد العمل. بانتظار تحديد المستخدم للميزة التالية.
-- فرع العمل: —
+- قوالب Remotion للزبون (طلب المستخدم 2026-11-11): معاينة الفيديو في لوحة الخدمة قبل توليده، ورندرته على الخادم
+  بالمكوّن نفسه (`ProductReel`) فما يراه الزبون هو ما يُنشر. القرارات (المستخدم): المعاينة والرندرة كلاهما بـ Remotion
+  (جرّبه على السيرفر من الطرفية)؛ **لوحة الزبون فقط**، والإدارة والريلز التلقائية تبقى على ffmpeg؛ لا تثبيت للرندرة
+  محلياً (المعاينة فقط)، فالرندرة بـ Remotion **لم تُجرَّب** ويجرّبها المستخدم على السيرفر؛ رخصة Remotion يتحقق منها بنفسه.
+- فرع العمل: `feat/remotion-reels` (بالاسم نفسه في المشروعين).
+- العقد:
+  `GET …/videos/options` ← كل قالب صار يحمل `zoom, pan, transition, crossfade, card` (المصدر `video_maker.template_spec`) ·
+  `POST …/videos` `{template, audio, image_ids}` ← الصور بترتيب المعاينة (حتى `max_images`، من مكتبة الصفحة، بلا تكرار) ·
+  `GET …/videos/audio/{name}` ← ملف الصوت للمعاينة (جلسة وصفحة مربوطة).
+- الخلفية: المراجعة `c8e2f4a6b1d3` (`factory_video_jobs.image_ids` JSON و`engine`). المحرك يُحفظ مع المهمة من
+  `CUSTOMER_VIDEO_ENGINE` (الافتراضي `remotion`). `app/services/remotion_render.py` يشغّل
+  `node remotion/render.mjs` داخل `REMOTION_DIR` (مجلد ikhlasdz) مع الصور والصوت في مجلد مؤقت، ثم faststart بـ ffmpeg.
+  الصور المحذوفة بعد الطلب تُتخطّى؛ إن حُذفت كلها تفشل المهمة برسالة.
+- الواجهة: `remotion/templates/product-reel/ProductReel.tsx` (القوالب العشرة بمكوّن واحد)، `remotion/Root.tsx`
+  و`remotion/index.ts` (مدخل التجميع)، `remotion/render.mjs` (الرندرة على الخادم)، و`features/service-dashboard/reel-preview.tsx`
+  في قسم «توليد الفيديو» مع زر «صور أخرى». `@remotion/bundler` و`@remotion/renderer` 4.0.539 في `package.json` والقفل
+  (`npm install --package-lock-only`، لم تُثبَّت محلياً).
+- **على السيرفر قبل التجربة**: `alembic upgrade head` · في `.env` الخلفية `REMOTION_DIR=<مسار ikhlasdz>`
+  (واختيارياً `NODE_BIN` و`REMOTION_CONCURRENCY` وفي بيئة العامل `REMOTION_BROWSER_EXECUTABLE`) · في ikhlasdz `npm install`
+  ثم `npx remotion browser ensure` · إعادة تشغيل `hadjret-video-worker`.
 
 ## الخلفية (FastAPI)
-- [ ] Schema مكتوب
-- [ ] Endpoint جاهز
-- [ ] الاختبار مرّ ✓
+- [x] Schema مكتوب (`CustomerVideoTemplateOption`، `image_ids` في `CustomerVideoRequest`)
+- [x] Endpoint جاهز (الخيارات، الطلب، `/videos/audio/{name}`، محرك Remotion في العامل)
+- [x] الاختبار مرّ ✓ (438، منها 6 جديدة في `test_customer_videos.py` و4 في `test_remotion_render.py`؛ السكريبت مقلَّد)
 
 ## الواجهة (Next.js)
-- [ ] Types معرّفة
-- [ ] API call جاهز
-- [ ] المكوّن/الصفحة مكتملة
-- [ ] الاختبار البصري مرّ ✓
+- [x] Types معرّفة
+- [x] API call جاهز (`requestVideo(…, imageIds)`، `audioUrl`، `previewProps`)
+- [x] المكوّن/الصفحة مكتملة
+- [ ] الاختبار البصري مرّ ✓ (مجرَّب في المتصفح: الانتقالات الخمسة، البطاقة، الصوت، ترتيب الصور يصل إلى المهمة، الهاتف؛
+      بانتظار تجربة المستخدم، والرندرة بـ Remotion على السيرفر)
 
 ## الميزات المنجزة
 كلها مدموجة في `main` ومنشورة على السيرفر (ما لم يُتحقق منه مذكور في الميزة).
@@ -122,8 +141,8 @@
   يؤكد أن `pages_manage_posts` يكفي لنشر فيديو (`/{page}/videos`) برمز الصفحة، وأن التوكن الطويل يعمل.
   التطبيق في وضع التطوير عند Meta يسمح بهذا لأصحاب الأدوار في التطبيق فقط.
 - التالي المقترح بعدها: النشر المجدول للزبون (أوقات يومية، والمؤقت الموجود `hadjret-publish.timer` ينشر ما حان).
-- Remotion محرك ثانٍ بعد ذلك. الموجود منه معاينة في المتصفح فقط: لا تصيير على السيرفر، وثلاثة من القوالب الأربعة
-  أفقية 1920×1080. يلزم التحقق من رخصة Remotion لحالة المستخدم قبل اعتماده.
+- Remotion لفيديوهات الزبون: قيد العمل في `feat/remotion-reels` (الميزة الحالية أعلاه). القوالب الأربعة القديمة في
+  `/templates/` (ثلاثة منها أفقية 1920×1080) خارج هذه الميزة. الرخصة يتحقق منها المستخدم حين يكبر العدد (قراره).
 - بوت التعليقات على صفحات الزبائن يحتاج قراراً: استقبال التعليقات عبر webhook يتطلب `pages_manage_metadata`
   (ليس من الأذونات الأربعة)، والرد الخاص يتطلب `pages_messaging`. البديل بالأذونات الأربعة: جلب التعليقات
   دورياً (`pages_read_engagement`) والرد العلني (`pages_manage_engagement`).
