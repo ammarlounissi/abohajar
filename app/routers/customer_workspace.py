@@ -4,13 +4,13 @@
 401 بلا جلسة · 404 خدمة مجهولة أو عنصر ليس لصفحته · 409 لم يربط صفحة بالخدمة · 422 طلب أو ملف مرفوض."""
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
-from app.services import customer_workspaces
+from app.services import customer_workspaces, post_publisher
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
 
@@ -90,3 +90,26 @@ def get_video_job(
     service_key: str, job_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
 ):
     return customer_workspaces.get_video_job(db, user.id, service_key, job_id)
+
+
+# --- نشر الفيديو على الصفحة المربوطة ---
+
+@router.get("/videos/posts", response_model=List[schemas.CustomerVideoPost])
+def list_video_posts(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """حالة نشر كل فيديو (آخر منشور له)."""
+    return customer_workspaces.list_video_posts(db, user.id, service_key)
+
+
+@router.post(
+    "/videos/{media_id}/publish", response_model=schemas.CustomerVideoPost,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def publish_video(
+    service_key: str, media_id: int, body: schemas.CustomerPublishRequest, background: BackgroundTasks,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """نشر فوري على الصفحة المربوطة: يرجع 202 بحالة publishing والنشر يجري بعد الرد؛
+    تُتابَع النتيجة من /videos/posts. الفاشل تُعاد محاولته بالطلب نفسه."""
+    view = customer_workspaces.publish_video(db, user.id, service_key, media_id, caption=body.caption)
+    background.add_task(post_publisher.publish_claimed_in_background, view["id"])
+    return view

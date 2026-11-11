@@ -77,11 +77,14 @@ class Publisher:
 
     platform: str = ""
     channel_id: Optional[str] = None     # معرّف القناة الأصلي؛ None = معرّف الإعدادات القديم
+    channel_token: Optional[str] = None  # رمز القناة المحفوظ معها (صفحة ربطها زبون)؛ None = رمز الإعدادات
 
-    def for_channel(self, channel_id: str) -> "Publisher":
-        """نسخة من المحوّل موجّهة إلى قناة بعينها (لا تغيّر الأصل، فيصلح لعدة قنوات في المنصة نفسها)."""
+    def for_channel(self, channel_id: str, token: Optional[str] = None) -> "Publisher":
+        """نسخة من المحوّل موجّهة إلى قناة بعينها (لا تغيّر الأصل، فيصلح لعدة قنوات في المنصة نفسها).
+        token: رمز القناة المحفوظ في social_channels إن وُجد. المحوّل الذي لا يحتاجه يتجاهله."""
         clone = copy.copy(self)
         clone.channel_id = channel_id
+        clone.channel_token = token or None
         return clone
 
     def validate(self, post) -> Optional[PublishError]:

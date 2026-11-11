@@ -9,6 +9,7 @@
 اتفاقية الحفظ: ensure_workspace لا تنفّذ commit (تُستدعى ضمن ربط الصفحة)؛ بقية الدوال تحفظ بنفسها."""
 import io
 import random
+from datetime import timedelta
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
@@ -16,9 +17,13 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app import models
-from app.models import FactoryKind
-from app.services import facebook_services, factory_video_jobs, factory_videos, media_library, video_maker
-from app.services.errors import ConflictError, InvalidInputError
+from app.core.config import settings
+from app.core.time import utc_now
+from app.models import DeliveryStatus, FactoryKind, PostApproval, PostStatus
+from app.services import (
+    facebook_services, factory_video_jobs, factory_videos, media_library, post_publisher, video_maker,
+)
+from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 
 # حدود رفع الزبون. الصورة الواحدة بحد ما يقبله مولّد الفيديو (factory_videos.MAX_LIBRARY_IMAGE_*).
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -150,8 +155,16 @@ def upload_image(
 
 
 def delete_media(db: Session, user_id: int, service_key: str, media_id: int) -> None:
-    """يحذف وسيطاً من مكتبة صفحة الزبون فقط (NotFoundError لما ليس فيها)."""
+    """يحذف وسيطاً من مكتبة صفحة الزبون فقط (NotFoundError لما ليس فيها).
+    فيديو قيد النشر لا يُحذف: فيسبوك ينزّله من رابطه أثناء النشر."""
     workspace = current_workspace(db, user_id, service_key)
+    item = db.query(models.Media).filter(
+        models.Media.id == media_id, models.Media.factory_id == workspace.factory_id,
+    ).first()
+    if item is not None and item.media_type == "video":
+        post = _latest_post(_reel_posts(db, workspace.factory_id), item.url)
+        if post is not None and post.status in _IN_FLIGHT:
+            raise InvalidInputError("هذا الفيديو قيد النشر الآن. انتظر انتهاء النشر ثم احذفه.")
     media_library.delete_factory_media(db, workspace.factory_id, media_id)
 
 
@@ -220,3 +233,138 @@ def get_video_job(db: Session, user_id: int, service_key: str, job_id: int) -> m
     """مهمة من مهام صفحة الزبون فقط (NotFoundError لغيرها)."""
     workspace = current_workspace(db, user_id, service_key)
     return factory_video_jobs.get_video_job(db, workspace.factory_id, job_id)
+
+
+# ───── نشر الفيديو على الصفحة المربوطة (الناشر وpost_deliveries كما هما) ─────
+
+MAX_CAPTION = 2200
+_IN_FLIGHT = (PostStatus.APPROVED, PostStatus.PUBLISHING)
+_SHOWN = _IN_FLIGHT + (PostStatus.PUBLISHED, PostStatus.FAILED)
+_TOKEN_MARKS = ("(#190", "(#463", "(#467", "page_access_token_unavailable", "config_missing")
+_PERMISSION_MARKS = ("(#200", "(#10)", "(#10/")
+
+
+def _reel_posts(db: Session, factory_id: int) -> List[models.Post]:
+    """منشورات الريل لمصنع الصفحة، الأحدث أولاً."""
+    return (
+        db.query(models.Post)
+        .filter(models.Post.factory_id == factory_id, models.Post.media_type == "reel")
+        .order_by(models.Post.id.desc())
+        .limit(500)
+        .all()
+    )
+
+
+def _post_url(post: models.Post) -> Optional[str]:
+    urls = list(post.media_urls or [])
+    return urls[0] if urls else None
+
+
+def _latest_post(posts: List[models.Post], url: str) -> Optional[models.Post]:
+    return next((post for post in posts if _post_url(post) == url), None)
+
+
+def _friendly_error(raw: Optional[str]) -> str:
+    """رسالة للزبون من خطأ النشر التقني (رموز Graph أو رموزنا القصيرة)."""
+    raw = raw or ""
+    if any(mark in raw for mark in _TOKEN_MARKS):
+        return "انتهت صلاحية ربط الصفحة أو سُحب الإذن. اضغط «تغيير الصفحة» وأعد ربطها ثم أعد المحاولة."
+    if any(mark in raw for mark in _PERMISSION_MARKS):
+        return "لا يملك التطبيق إذن النشر على هذه الصفحة. أعد ربطها وامنح الأذونات كلها ثم أعد المحاولة."
+    if "channel_inactive" in raw:
+        return "الصفحة متوقفة. أعد ربطها ثم أعد المحاولة."
+    return "تعذّر النشر على Facebook. أعد المحاولة بعد قليل."
+
+
+def _post_view(post: models.Post, media_ids: dict, page_id: str) -> dict:
+    """ما يراه الزبون من منشور فيديو. unknown: بقي قيد النشر أكثر من المهلة فلا نعرف هل نُشر."""
+    delivery = post.deliveries[0] if post.deliveries else None
+    status = post.status.value
+    if post.status in _IN_FLIGHT:
+        stale = post.status == PostStatus.PUBLISHING and (
+            post.claimed_at is None
+            or utc_now() - post.claimed_at > timedelta(minutes=settings.PUBLISH_STALE_MINUTES)
+        )
+        status = "unknown" if stale else "publishing"
+    failed = post.status == PostStatus.FAILED
+    raw_error = ((delivery.error if delivery else None) or post.error) if failed else None
+    remote_id = delivery.remote_id if delivery and delivery.status == DeliveryStatus.PUBLISHED.value else None
+    url = _post_url(post)
+    return {
+        "id": post.id,
+        "media_id": media_ids.get(url),
+        "video_url": url,
+        "caption": post.description or "",
+        "status": status,
+        "error": _friendly_error(raw_error) if failed else None,
+        "error_detail": (raw_error or None) and raw_error[:300],
+        "published_at": post.published_at,
+        "facebook_url": f"https://www.facebook.com/{page_id}/videos/{remote_id}" if remote_id else None,
+    }
+
+
+def _media_ids(db: Session, factory_id: int) -> dict:
+    rows = db.query(models.Media.url, models.Media.id).filter(
+        models.Media.factory_id == factory_id, models.Media.media_type == "video",
+    )
+    return {url: media_id for url, media_id in rows}
+
+
+def list_video_posts(db: Session, user_id: int, service_key: str) -> List[dict]:
+    """حالة نشر كل فيديو على الصفحة: آخر منشور لكل فيديو، الأحدث أولاً."""
+    workspace = current_workspace(db, user_id, service_key)
+    media_ids = _media_ids(db, workspace.factory_id)
+    seen, views = set(), []
+    for post in _reel_posts(db, workspace.factory_id):
+        url = _post_url(post)
+        if url is None or url in seen or post.status not in _SHOWN:
+            continue
+        seen.add(url)
+        views.append(_post_view(post, media_ids, workspace.page_id))
+    return views
+
+
+def publish_video(
+    db: Session, user_id: int, service_key: str, media_id: int, *, caption: Optional[str],
+) -> dict:
+    """يحجز نشر فيديو من مكتبة الصفحة على الصفحة المربوطة فوراً ويرجع حالته (publishing).
+    المستدعي يشغّل النشر نفسه بعد الرد: post_publisher.publish_claimed_in_background(id).
+    الفيديو يُنشر مرة واحدة؛ النشر الفاشل تُعاد محاولته على المنشور نفسه."""
+    workspace = current_workspace(db, user_id, service_key)
+    factory_id = workspace.factory_id
+    channel = facebook_services.connected_channel(db, user_id, service_key)
+    video = db.query(models.Media).filter(
+        models.Media.id == media_id, models.Media.factory_id == factory_id,
+        models.Media.media_type == "video",
+    ).first()
+    if video is None:
+        raise NotFoundError("الفيديو غير موجود في مكتبة صفحتك")
+    if not channel.is_active or not channel.page_access_token:
+        raise InvalidInputError("صفحتك تحتاج إعادة ربط قبل النشر عليها. اضغط «تغيير الصفحة» وأعد ربطها.")
+    caption = (caption or "").strip()
+    if len(caption) > MAX_CAPTION:
+        raise InvalidInputError(f"النص أطول من الحد المسموح ({MAX_CAPTION} حرفاً)")
+
+    existing = _latest_post(_reel_posts(db, factory_id), video.url)
+    if existing is not None and existing.status == PostStatus.PUBLISHED:
+        raise InvalidInputError("نُشر هذا الفيديو على صفحتك من قبل")
+    if existing is not None and existing.status in _IN_FLIGHT:
+        raise InvalidInputError("هذا الفيديو قيد النشر الآن")
+    if existing is not None and existing.status == PostStatus.FAILED:
+        existing.description = caption
+        post_publisher.set_channels(db, existing, [channel.id])     # يحفظ (commit)
+        post = post_publisher.claim_post(db, existing.id)
+    else:
+        now = utc_now()
+        # يُنشأ محجوزاً (publishing) مباشرة: لو أُنشئ approved لالتقطه مؤقت النشر الدوري قبل نشرنا الفوري
+        post = models.Post(
+            factory_id=factory_id, media_type="reel", media_urls=[video.url], description=caption,
+            status=PostStatus.PUBLISHING, approval=PostApproval.APPROVED, approved_at=now, claimed_at=now,
+        )
+        post.deliveries = [
+            models.PostDelivery(channel_id=channel.id, status=DeliveryStatus.PENDING.value, attempts=0),
+        ]
+        db.add(post)
+        db.commit()
+        db.refresh(post)
+    return _post_view(post, {video.url: video.id}, workspace.page_id)

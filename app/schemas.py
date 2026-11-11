@@ -483,6 +483,25 @@ class CustomerVideoRequest(BaseModel):
         return (value.strip() or None) if isinstance(value, str) else value
 
 
+class CustomerPublishRequest(BaseModel):
+    """نص المنشور المرافق للفيديو (اختياري)."""
+    caption: str = Field(default="", max_length=2200)
+
+
+class CustomerVideoPost(BaseModel):
+    """حالة نشر فيديو على صفحة الزبون. unknown: بقي قيد النشر أكثر من المهلة ولا نعرف هل نُشر.
+    error رسالة للزبون، وerror_detail النص التقني كما جاء (للدعم). media_id فارغ إن حُذف الفيديو من المكتبة."""
+    id: int
+    media_id: Optional[int] = None
+    video_url: str
+    caption: str
+    status: Literal["publishing", "published", "failed", "unknown"]
+    error: Optional[str] = None
+    error_detail: Optional[str] = None
+    published_at: Optional[datetime] = None
+    facebook_url: Optional[str] = None
+
+
 class CustomerVideoJob(BaseModel):
     """مهمة توليد فيديو لصفحة الزبون. video_url يُملأ عند النجاح، وerror عند الفشل."""
     model_config = ConfigDict(from_attributes=True)

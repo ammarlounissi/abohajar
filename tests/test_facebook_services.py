@@ -4,7 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -270,6 +270,45 @@ class FacebookServiceTests(unittest.TestCase):
             self.assertEqual(db.query(models.ServiceConnection).count(), 0)
             self.assertEqual(db.query(models.SocialChannel).count(), 0)
 
+
+    # ───── توكن طويل العمر: توكنات الصفحات تُستخرج منه فلا تنتهي بعد ساعة ─────
+
+    def _callback_with_exchange(self, exchange):
+        seen = []
+        original = self.fake_get
+
+        async def spy(client, path, **params):
+            seen.append((path, params.get("grant_type"), params.get("access_token")))
+            if path == "oauth/access_token" and params.get("grant_type") == "fb_exchange_token":
+                return exchange(params)
+            if params.get("access_token") == "long-tok":
+                params["access_token"] = "user-tok"     # الفيسبوك الوهمي يعرف الصفحات بالتوكن القصير
+            return await original(client, path, **params)
+
+        c = self.client()
+        state = auth._make_state(service=SERVICE)
+        c.cookies.set("hb_oauth", state.split(".")[1])
+        with patch.object(auth, "_graph_get", spy):
+            res = c.get(f"/auth/facebook/callback?code=c&state={state}")
+        return res, seen
+
+    def test_user_token_is_exchanged_for_a_long_lived_one(self):
+        def exchange(params):
+            self.assertEqual((params["fb_exchange_token"], params["client_secret"]), ("user-tok", "secret"))
+            return {"access_token": "long-tok"}
+
+        res, seen = self._callback_with_exchange(exchange)
+        self.assertEqual(self.location(res)["facebook"], "connected")
+        self.assertIn(("oauth/access_token", "fb_exchange_token", None), seen)
+        self.assertIn(("me/accounts", None, "long-tok"), seen)      # الصفحات تُجلب بالتوكن الطويل
+
+    def test_failed_exchange_still_links_the_page(self):
+        def exchange(params):
+            raise HTTPException(status_code=502, detail="Facebook GET فشل")
+
+        res, _ = self._callback_with_exchange(exchange)
+        self.assertEqual(self.location(res)["facebook"], "connected")
+        self.assertEqual(self.channels(), [("11111111", "page-tok-1")])
 
 if __name__ == "__main__":
     unittest.main()
