@@ -78,6 +78,13 @@ class Settings:
     GEMINI_API_KEY = _get("GEMINI_API_KEY")
     GEMINI_TIMEOUT = _get_int("GEMINI_TIMEOUT") or 90
     FFMPEG_NICE = _get_int("FFMPEG_NICE") or 15            # أولوية منخفضة لـ ffmpeg كي لا يُجوّع Ollama
+    # محرك فيديوهات لوحة الزبون: remotion (ما يراه في المعاينة) أو ffmpeg. الإدارة والريلز التلقائية تبقى على ffmpeg.
+    # يُحفظ المحرك مع كل مهمة عند طلبها، فتغييره لا يمس ما في الطابور.
+    CUSTOMER_VIDEO_ENGINE = _get("CUSTOMER_VIDEO_ENGINE", "remotion").lower()
+    # مجلد مشروع الواجهة (ikhlasdz) على الجهاز نفسه: فيه مكوّن ProductReel وسكريبت الرندرة remotion/render.mjs.
+    REMOTION_DIR = Path(_get("REMOTION_DIR")).expanduser() if _get("REMOTION_DIR") else None
+    NODE_BIN = _get("NODE_BIN", "node")
+    REMOTION_CONCURRENCY = _get_int("REMOTION_CONCURRENCY") or 2   # صفحات Chrome المتوازية أثناء الرندرة
     ALLOWED_ORIGINS = [
     o.strip( )
     for o in _get(

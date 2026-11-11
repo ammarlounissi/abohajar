@@ -5,6 +5,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import schemas
@@ -73,8 +74,15 @@ def request_video(
 ):
     """يضع توليد الفيديو في الطابور ويعيد المهمة فوراً؛ تُتابَع حالتها من /videos/jobs/{id}."""
     return customer_workspaces.request_video(
-        db, user.id, service_key, template=body.template, audio=body.audio,
+        db, user.id, service_key, template=body.template, audio=body.audio, image_ids=body.image_ids,
     )
+
+
+@router.get("/videos/audio/{name}", response_class=FileResponse)
+def get_audio(service_key: str, name: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """ملف صوت من قائمة /videos/options، لتسمعه المعاينة في اللوحة قبل التوليد."""
+    path = customer_workspaces.audio_file(db, user.id, service_key, name)
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/videos/jobs", response_model=List[schemas.CustomerVideoJob])

@@ -462,9 +462,20 @@ class CustomerMediaResponse(BaseModel):
     description: Optional[str] = None
 
 
+class CustomerVideoTemplateOption(FactoryVideoTemplateOption):
+    """القالب مع ما يرسمه به مكوّن Remotion (ProductReel) في المعاينة والرندرة.
+    zoom: مقدار التكبير على طول اللقطة (0.08 = 8%). pan: انزلاق أفقي مع التكبير. crossfade: مدة الانتقال بالثواني.
+    card: إطار أبيض حول الصورة."""
+    zoom: float
+    pan: bool
+    transition: Literal["fade", "fadeblack", "smoothleft", "wipeleft", "circleopen"]
+    crossfade: float
+    card: bool
+
+
 class CustomerVideoOptions(BaseModel):
     """ما يختار منه الزبون قبل توليد فيديو من صور مكتبته."""
-    templates: List[FactoryVideoTemplateOption]
+    templates: List[CustomerVideoTemplateOption]
     default_template: str
     audio_files: List[str]
     images_count: int
@@ -473,9 +484,11 @@ class CustomerVideoOptions(BaseModel):
 
 
 class CustomerVideoRequest(BaseModel):
-    """طلب فيديو من صور المكتبة. بلا قالب: القالب الافتراضي. بلا صوت: صوت عشوائي من المتاح."""
+    """طلب فيديو من صور المكتبة. بلا قالب: القالب الافتراضي. بلا صوت: صوت عشوائي من المتاح.
+    image_ids: صور المكتبة بترتيب المعاينة (حتى max_images للقالب)؛ بدونها تُختار عشوائياً."""
     template: Optional[str] = Field(default=None, min_length=1, max_length=40)
     audio: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    image_ids: Optional[List[int]] = Field(default=None, min_length=1, max_length=60)
 
     @field_validator("template", "audio", mode="before")
     @classmethod
