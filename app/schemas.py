@@ -502,16 +502,17 @@ class CustomerPublishRequest(BaseModel):
 
 
 class CustomerVideoPost(BaseModel):
-    """حالة نشر فيديو على صفحة الزبون. unknown: بقي قيد النشر أكثر من المهلة ولا نعرف هل نُشر.
+    """حالة نشر فيديو على صفحة الزبون. scheduled: منشور مجدول ينتظر موعده. unknown: بقي قيد النشر أكثر من المهلة ولا نعرف هل نُشر.
     error رسالة للزبون، وerror_detail النص التقني كما جاء (للدعم). media_id فارغ إن حُذف الفيديو من المكتبة."""
     id: int
     media_id: Optional[int] = None
     video_url: str
     caption: str
-    status: Literal["publishing", "published", "failed", "unknown"]
+    status: Literal["scheduled", "publishing", "published", "failed", "unknown"]
     error: Optional[str] = None
     error_detail: Optional[str] = None
     published_at: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None        # للمجدول (scheduled): موعد نشره، UTC
     facebook_url: Optional[str] = None
 
 
@@ -608,6 +609,77 @@ class CustomerVideoJob(BaseModel):
     error: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
+
+
+# --- النشر الجماعي المجدول: مسودات تُراجع ويُوافق عليها قبل الرندرة والنشر ---
+class CustomerDraftImage(BaseModel):
+    id: int
+    url: str
+
+
+class CustomerDraft(BaseModel):
+    """مسودة منشور فيديو مجدول، بكل ما سيُنشر كما يُعاين. الأوقات UTC (بلاحقة Z).
+    status: writing (Gemini يكتب) · ready (بانتظار المراجعة) · approved (وافق، الفيديو ينتظر دوره قبل الموعد)
+    · rendering · scheduled (جاهز وينتظر موعده) · publishing · published · failed · cancelled (تُسترجع).
+    images: صور المكتبة بترتيبها (ما حُذف منها لا يظهر). caption_error: تعذّرت كتابة النص فيكتبه الزبون."""
+    id: int
+    status: Literal[
+        "writing", "ready", "approved", "rendering", "scheduled", "publishing", "published", "failed", "cancelled",
+    ]
+    template: str
+    audio: Optional[str] = None
+    images: List[CustomerDraftImage]
+    caption: str
+    caption_error: Optional[str] = None
+    scheduled_at: datetime
+    planned_at: datetime                        # الموعد الأصلي عند التوليد (للعودة إليه)
+    cancelled_at: Optional[datetime] = None
+    approved_at: Optional[datetime] = None
+    error: Optional[str] = None
+    video_url: Optional[str] = None
+    facebook_url: Optional[str] = None
+    published_at: Optional[datetime] = None
+
+
+class CustomerDraftRules(BaseModel):
+    """قيود الجدولة كما تطبقها الخلفية، لتعرضها الواجهة وتتحقق بها قبل الإرسال."""
+    max_batch: int
+    max_open: int
+    max_per_day: int
+    min_gap_hours: int
+    min_lead_minutes: int
+    max_ahead_days: int
+    timezone: str
+
+
+class CustomerDrafts(BaseModel):
+    """مسودات الصفحة ومنشوراتها المجدولة، الأقرب موعداً أولاً."""
+    drafts: List[CustomerDraft]
+    rules: CustomerDraftRules
+
+
+class CustomerDraftsRequest(BaseModel):
+    """توليد count مسودة، واحدة كل يوم ابتداءً من الغد في الساعة time (بتوقيت الجزائر)."""
+    count: int = Field(default=30, ge=1, le=30)
+    time: str = Field(default="20:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class CustomerDraftUpdate(BaseModel):
+    """caption: قبل الموافقة فقط. scheduled_at: بمنطقة زمنية (مثل ...Z)، ويُقبل قبل النشر."""
+    caption: Optional[str] = Field(default=None, max_length=2200)
+    scheduled_at: Optional[datetime] = None
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def require_timezone(cls, value):
+        if value is not None and value.tzinfo is None:
+            raise ValueError("الموعد يُرسل بمنطقته الزمنية، مثل 2026-11-20T19:00:00Z")
+        return value
+
+
+class CustomerDraftsApproval(BaseModel):
+    """المسودات التي راجعها الزبون ووافق عليها (بأرقامها كما ظهرت له)."""
+    ids: List[int] = Field(min_length=1, max_length=60)
 
 
 # --- المنتجات ---
