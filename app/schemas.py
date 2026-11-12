@@ -682,6 +682,35 @@ class CustomerDraftsApproval(BaseModel):
     ids: List[int] = Field(min_length=1, max_length=60)
 
 
+# --- إشعارات المتصفح ---
+class PushStatus(BaseModel):
+    """available=False: المفتاحان غير مضبوطين على الخادم، فتخفي اللوحة زر الإشعارات."""
+    available: bool
+    public_key: Optional[str] = None          # applicationServerKey للمتصفح (base64url)
+    devices: int                              # أجهزة هذه الصفحة المشتركة
+    subscribed: bool                          # هل الجهاز المرسَل (endpoint) منها
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=200)
+    auth: str = Field(min_length=1, max_length=100)
+
+
+class PushSubscriptionIn(BaseModel):
+    """ما يعيده PushSubscription.toJSON() في المتصفح."""
+    endpoint: str = Field(min_length=1, max_length=1000)
+    keys: PushSubscriptionKeys
+    expirationTime: Optional[float] = None
+
+
+class PushEndpoint(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=1000)
+
+
+class PushTestResult(BaseModel):
+    sent: bool
+
+
 # --- المنتجات ---
 class ProductBase(BaseModel):
     sku: str = Field(pattern=SKU_PATTERN)

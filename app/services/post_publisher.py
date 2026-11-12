@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models import DeliveryStatus, PostStatus, ReportKind
+from app.services import push_notifications
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.social import build_publishers
 from app.services.social.base import Publisher, PublishError, PublishResult
@@ -405,7 +406,25 @@ async def publish_post(db: Session, post: models.Post, publishers: Dict[str, Pub
         post.error = None
     db.commit()
     outcome.status = post.status.value
+    await _notify_outcome(db, post)
     return outcome
+
+
+async def _notify_outcome(db: Session, post: models.Post) -> None:
+    """إشعار أجهزة الصفحة بنتيجة النشر (إن فعّل صاحبها الإشعارات). المنشور من مسودة يفتح صفحة الجدولة."""
+    if not push_notifications.available():
+        return
+    try:
+        scheduled = db.query(models.PostDraft.id).filter(models.PostDraft.post_id == post.id).first() is not None
+    except Exception:
+        db.rollback()
+        logger.exception("Looking up the draft of post %s failed", post.id)
+        scheduled = False
+    if post.status == PostStatus.PUBLISHED:
+        message = push_notifications.post_published(post.id, post.description, scheduled)
+    else:
+        message = push_notifications.post_failed(post.id, scheduled)
+    await push_notifications.notify_async(db, post.factory_id, message)
 
 
 async def publish_due(

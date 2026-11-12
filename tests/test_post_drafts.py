@@ -1,5 +1,6 @@
 """النشر الجماعي المجدول: «توليد 30 مسودة» ثم المراجعة والموافقة، ولا رندرة ولا نشر قبل موافقة صاحب الصفحة."""
 import hashlib
+import json
 import unittest
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -9,7 +10,9 @@ from zoneinfo import ZoneInfo
 from app import models
 from app.core.config import settings
 from app.models import PostStatus
-from app.services import customer_captions, customer_workspaces, factory_video_jobs, ollama_chat, post_drafts
+from app.services import (
+    customer_captions, customer_workspaces, factory_video_jobs, ollama_chat, post_drafts, push_notifications,
+)
 from app.services.errors import InvalidInputError
 from tests.test_customer_workspace import BASE, WorkspaceTestBase
 
@@ -437,6 +440,42 @@ class PostDraftTests(WorkspaceTestBase):
         client.delete(f"{BASE}/drafts/{draft['id']}")
         self.now = NOW + timedelta(days=31)
         self.assertEqual(self.drafts(client), [])
+
+
+    def test_push_once_when_all_drafts_are_ready_and_when_one_fails(self):
+        """إشعار واحد حين تنتهي كتابة الدفعة كلها (لا لكل مسودة)، وإشعار لكل مسودة تعذّر تجهيزها."""
+        from scripts.generate_vapid_keys import generate
+        from tests.test_push_notifications import subscription
+
+        public_key, private_key = generate()
+        sent = []
+        for patcher in (
+            mock.patch.object(settings, "VAPID_PUBLIC_KEY", public_key),
+            mock.patch.object(settings, "VAPID_PRIVATE_KEY", private_key),
+            mock.patch.object(push_notifications, "_post", side_effect=lambda info, data, ttl: sent.append(
+                json.loads(data))),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        client = self.ready_client()
+        self.assertEqual(client.post(f"{BASE}/push/subscriptions", json=subscription()).status_code, 200)
+        self.generate(client, 3)
+        self.write_captions()
+        self.assertEqual([m["tag"] for m in sent], ["drafts-ready"])
+        self.assertIn("3", sent[0]["body"])
+        self.assertTrue(sent[0]["url"].endswith("/dashboard/schedule/"))
+        draft = self.drafts(client)[0]
+        client.post(f"{BASE}/drafts/{draft['id']}/caption")      # إعادة كتابة نص واحد: إشعار واحد أيضاً
+        self.write_captions()
+        self.assertEqual(len(sent), 2)
+        client.post(f"{BASE}/drafts/approve", json={"ids": [draft["id"]]})
+        self.now = NOW + timedelta(hours=20)
+        with mock.patch("app.services.video_maker._run_ffmpeg", side_effect=RuntimeError("boom")):
+            self.render_all()
+        self.assertEqual(sent[-1]["tag"], f"draft-{draft['id']}")
+        self.assertIn("تجهيز الفيديو", sent[-1]["body"])
+        self.render_all()
+        self.assertEqual(len(sent), 3)                               # الفاشلة لا تُشعر مرة أخرى
 
 
 class SlotRuleTests(unittest.TestCase):

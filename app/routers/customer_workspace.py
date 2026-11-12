@@ -4,14 +4,16 @@
 401 بلا جلسة · 404 خدمة مجهولة أو عنصر ليس لصفحته · 409 لم يربط صفحة بالخدمة · 422 طلب أو ملف مرفوض."""
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
-from app.services import customer_captions, customer_workspaces, post_drafts, post_publisher
+from app.services import (
+    customer_captions, customer_workspaces, post_drafts, post_publisher, push_notifications,
+)
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
 
@@ -212,3 +214,45 @@ def restore_draft(
 ):
     """يعيد مسودة ملغاة إلى «بانتظار المراجعة» (تُوافق عليها من جديد)، وينقل موعدها إن لم يعد صالحاً."""
     return post_drafts.restore_draft(db, user.id, service_key, draft_id)
+
+
+# --- إشعارات المتصفح لأجهزة الصفحة ---
+
+@router.get("/push", response_model=schemas.PushStatus)
+def get_push_status(
+    service_key: str, endpoint: Optional[str] = Query(None, max_length=1000),
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """هل الإشعارات متاحة، والمفتاح العام للاشتراك، وعدد أجهزة الصفحة، وهل هذا الجهاز (endpoint) مشترك."""
+    return push_notifications.status(db, user.id, service_key, endpoint)
+
+
+@router.post("/push/subscriptions", response_model=schemas.PushStatus)
+def subscribe_push(
+    service_key: str, body: schemas.PushSubscriptionIn,
+    user_agent: Optional[str] = Header(None),
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """يحفظ اشتراك هذا الجهاز في إشعارات الصفحة (أو يحدّثه). 409 إن لم تُفعَّل الإشعارات على الخادم،
+    و422 لعنوان ليس لخدمة دفع معروفة."""
+    return push_notifications.subscribe(
+        db, user.id, service_key, endpoint=body.endpoint, p256dh=body.keys.p256dh, auth=body.keys.auth,
+        user_agent=user_agent,
+    )
+
+
+@router.post("/push/unsubscribe", status_code=status.HTTP_204_NO_CONTENT)
+def unsubscribe_push(
+    service_key: str, body: schemas.PushEndpoint, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """يوقف إشعارات الصفحة على هذا الجهاز (لا خطأ إن لم يكن مشتركاً)."""
+    push_notifications.unsubscribe(db, user.id, service_key, body.endpoint)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/push/test", response_model=schemas.PushTestResult)
+def test_push(
+    service_key: str, body: schemas.PushEndpoint, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """إشعار تجريبي لهذا الجهاز وحده. 404 إن لم يكن مشتركاً."""
+    return {"sent": push_notifications.send_test(db, user.id, service_key, body.endpoint)}
