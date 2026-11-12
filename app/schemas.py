@@ -452,6 +452,45 @@ class CustomerWorkspaceResponse(BaseModel):
     image_extensions: List[str]
 
 
+class CustomerPageLook(BaseModel):
+    """الصفحة المربوطة كما تظهر في فيسبوك. الصور روابط فيسبوك الموقّعة (تُعرض مباشرة)، وأي منها فارغ إن تعذّر جلبه.
+    cover_offset_y: موضع الغلاف عمودياً كما ضبطه صاحب الصفحة (0 أعلى الصورة، 100 أسفلها)."""
+    page_id: str
+    name: str
+    is_active: bool
+    picture_url: Optional[str] = None
+    cover_url: Optional[str] = None
+    cover_offset_y: int = 50
+    followers: Optional[int] = None
+    link: Optional[str] = None
+
+
+class CustomerOverview(BaseModel):
+    """رئيسية لوحة الزبون: صفحته، وما ينتظره منه، وما أُنجز.
+    missing_settings: ما لم يُكتب في إعدادات الصفحة (activity · whatsapp · hashtags).
+    drafts_to_review: مسودات جاهزة تنتظر موافقته؛ drafts_writing: تُكتب نصوصها الآن.
+    scheduled: ما وافق عليه ولم يُنشر بعد (يُجهَّز أو ينتظر موعده)، وأقرب موعد next_scheduled_at (UTC).
+    published: منشورات الفيديو المنشورة على الصفحة منذ البداية. ما تعذّر نشره ويحتاج تدخله: failed_scheduled من
+    المسودات (قسم النشر المجدول)، وfailed_videos من النشر اليدوي (قسم توليد الفيديو).
+    timezone: توقيت عرض المواعيد (توقيت النشر)."""
+    page: CustomerPageLook
+    missing_settings: List[Literal["activity", "whatsapp", "hashtags"]]
+    images: int
+    max_images: int
+    videos: int
+    video_generating: bool
+    drafts_to_review: int
+    drafts_writing: int
+    scheduled: int
+    next_scheduled_at: Optional[datetime] = None
+    published: int
+    failed_scheduled: int
+    failed_videos: int
+    timezone: str
+    notifications_available: bool
+    notification_devices: int
+
+
 class CustomerMediaResponse(BaseModel):
     """وسيط في مكتبة صفحة الزبون. بلا رقم المصنع: الزبون لا يتعامل به."""
     model_config = ConfigDict(from_attributes=True)
