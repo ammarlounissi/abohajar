@@ -51,7 +51,7 @@ class FactoryResponse(FactoryBase):
     id: int
     is_active: bool
     kind: str = "supplier"                 # supplier | customer (مساحة زبون لصفحته المربوطة)
-    phone_number: Optional[str] = None     # فارغ لمساحات الزبائن
+    phone_number: Optional[str] = None     # اختياري لمساحات الزبائن
 
 
 class AIModelSelection(BaseModel):
@@ -513,6 +513,85 @@ class CustomerVideoPost(BaseModel):
     error_detail: Optional[str] = None
     published_at: Optional[datetime] = None
     facebook_url: Optional[str] = None
+
+
+class CustomerProfile(BaseModel):
+    """إعدادات صفحة الزبون، وكلها لمصنع الصفحة (لا للمستخدم). name وactivity يكتب منهما Gemini الوصف؛
+    whatsapp (factories.phone_number) وhashtags تُلحق بعده كما هي. activity فارغ إن لم يُكتب ولم يأتِ من فيسبوك.
+    admin_managed: صفحة مصنع مورّد، اسمه ورقمه تديرهما الإدارة فلا يُعدَّلان من هنا."""
+    name: str
+    admin_managed: bool
+    activity: str
+    whatsapp: Optional[str] = None
+    hashtags: List[str]
+
+
+MAX_PROFILE_HASHTAGS = 10
+_HASHTAG_BODY = re.compile(r"^[\w]{2,40}$")
+
+
+class CustomerProfileUpdate(BaseModel):
+    """تعديل جزئي: يُغيَّر ما أُرسل فقط. whatsapp فارغ أو null يحذف الرقم، وhashtags [] تحذف الوسوم.
+    whatsapp يقبل المحلي (0550123456 -> +213550123456) والدولي (+213…، 00213…).
+    hashtags تقبل الوسم بـ # أو بدونه، والمسافات داخله تصير _."""
+    name: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    activity: Optional[str] = Field(default=None, min_length=3, max_length=500)
+    whatsapp: Optional[str] = Field(default=None, max_length=20)
+    hashtags: Optional[List[str]] = Field(default=None, max_length=MAX_PROFILE_HASHTAGS)
+
+    @field_validator("name", "activity", mode="before")
+    @classmethod
+    def collapse_spaces(cls, value):
+        return " ".join(value.split()) if isinstance(value, str) else value
+
+    @field_validator("whatsapp", mode="before")
+    @classmethod
+    def normalize_whatsapp(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("رقم واتساب نص")
+        raw = re.sub(r"[\s\-().]", "", value)
+        if not raw:
+            return ""
+        if raw.startswith("00"):
+            raw = "+" + raw[2:]
+        elif re.fullmatch(r"0[5-7]\d{8}", raw):          # رقم جوال جزائري محلي
+            raw = "+213" + raw[1:]
+        elif not raw.startswith("+"):
+            raw = "+" + raw
+        if not re.fullmatch(r"\+\d{8,15}", raw):
+            raise ValueError("رقم واتساب غير صالح؛ اكتبه مثل 0550123456 أو +213550123456")
+        return raw
+
+    @field_validator("hashtags", mode="before")
+    @classmethod
+    def normalize_hashtags(cls, values):
+        if values is None:
+            return None
+        if not isinstance(values, list):
+            raise ValueError("الوسوم قائمة")
+        tags = []
+        for value in values:
+            body = "_".join(str(value).replace("#", " ").split())
+            if not body:
+                continue
+            if not _HASHTAG_BODY.fullmatch(body):
+                raise ValueError(f"وسم غير صالح: {value} (حروف وأرقام فقط، من 2 إلى 40)")
+            tags.append("#" + body)
+        return list(dict.fromkeys(tags))
+
+
+class CustomerCaptionJob(BaseModel):
+    """مهمة كتابة نص منشور بـ Gemini. caption يُملأ عند النجاح، وerror (رسالة للزبون) مع
+    error_detail (النص التقني) عند الفشل."""
+    id: int
+    status: Literal["queued", "running", "succeeded", "failed"]
+    caption: Optional[str] = None
+    error: Optional[str] = None
+    error_detail: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
 
 
 class CustomerVideoJob(BaseModel):
