@@ -33,7 +33,7 @@ from app.core.time import utc_now
 from app.models import DeliveryStatus, PostApproval, PostStatus
 from app.services import (
     customer_captions, customer_workspaces, facebook_services, factory_video_jobs, ollama_chat,
-    post_publisher, video_maker,
+    post_publisher, push_notifications, video_maker,
 )
 from app.services.errors import InvalidInputError, NotFoundError, ServiceError
 
@@ -225,7 +225,7 @@ def advance_captions(db: Session, factory_id: int) -> None:
     writing = db.query(models.PostDraft).filter(
         models.PostDraft.factory_id == factory_id, models.PostDraft.status == WRITING,
     ).order_by(models.PostDraft.scheduled_at, models.PostDraft.id).all()
-    busy = False
+    busy = finished = False
     for draft in writing:
         job = draft.caption_job
         if job is None:
@@ -233,17 +233,19 @@ def advance_captions(db: Session, factory_id: int) -> None:
         db.refresh(job)
         if job.status == "succeeded" and job.response:
             draft.caption = customer_captions.compose_caption(job.response, factory)
-            draft.caption_error, draft.status = None, READY
+            draft.caption_error, draft.status, finished = None, READY, True
         elif job.status in _ACTIVE_JOB:
             busy = True
         else:
-            draft.caption, draft.status = "", READY
+            draft.caption, draft.status, finished = "", READY, True
             draft.caption_error = customer_captions.FRIENDLY_FAILURE
     db.commit()
     if busy:
         return
     nxt = next((draft for draft in writing if draft.status == WRITING and draft.caption_job_id is None), None)
     if nxt is None:
+        if finished:
+            _notify_ready(db, factory_id)
         return
     try:
         job = ollama_chat.enqueue_description_job(
@@ -255,9 +257,19 @@ def advance_captions(db: Session, factory_id: int) -> None:
             if draft.status == WRITING and draft.caption_job_id is None:
                 draft.caption, draft.status, draft.caption_error = "", READY, str(exc)
         db.commit()
+        _notify_ready(db, factory_id)
         return
     nxt.caption_job_id = job.id
     db.commit()
+
+
+def _notify_ready(db: Session, factory_id: int) -> None:
+    """انتهت كتابة نصوص الصفحة كلها: إشعار بعدد المسودات التي تنتظر الموافقة."""
+    count = db.query(models.PostDraft).filter(
+        models.PostDraft.factory_id == factory_id, models.PostDraft.status == READY,
+    ).count()
+    if count:
+        push_notifications.notify(db, factory_id, push_notifications.drafts_ready(count))
 
 
 def _claim(db: Session, draft_id: int, before: str, after: str) -> bool:
@@ -272,6 +284,7 @@ def _claim(db: Session, draft_id: int, before: str, after: str) -> bool:
 def _fail(db: Session, draft: models.PostDraft, message: str) -> None:
     draft.status, draft.error = FAILED, message
     db.commit()
+    push_notifications.notify(db, draft.factory_id, push_notifications.draft_failed(draft.id, message))
 
 
 def _facebook_channel_id(db: Session, factory_id: int) -> Optional[int]:

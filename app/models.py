@@ -265,6 +265,27 @@ class PostDraftApproval(Base):
     scheduled_at = Column(DateTime, nullable=False)
 
 
+class PushSubscription(Base):
+    """جهاز (متصفح) فعّل إشعارات لوحة صفحةٍ ما: يُرسل إليه حين تجهز المسودات للمراجعة، أو يتعذّر تجهيز منشور،
+    أو يُنشر منشور أو يفشل. الإشعار يخص الصفحة، فالصف تابع لمصنعها لا للمستخدم.
+    service_key: الخدمة التي فُعّل منها، ليفتح الإشعار لوحتها. endpoint عنوان خدمة الدفع في المتصفح (سرّي:
+    من يعرفه مع المفتاحين يرسل إلى الجهاز)؛ endpoint_sha256 بصمته للقيد الفريد لأن العنوان طويل."""
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (UniqueConstraint("factory_id", "endpoint_sha256", name="uq_push_subscriptions_factory_endpoint"),)
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    service_key = Column(String(60), nullable=False)
+    endpoint = Column(Text, nullable=False)
+    endpoint_sha256 = Column(String(64), nullable=False, index=True)
+    p256dh = Column(String(200), nullable=False)
+    auth = Column(String(100), nullable=False)
+    user_agent = Column(String(300), nullable=True)
+    failures = Column(Integer, nullable=False, default=0, server_default="0")   # إخفاقات متتالية؛ يُحذف بعد حد
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    last_sent_at = Column(DateTime, nullable=True)
+
+
 class DriveSyncedFile(Base):
     """ملف صورة من مجلد Google Drive المشارَك مع المشروع، ومعالجته في مكتبة المصنع.
     الصف يُنشأ بحالة copying قبل التنزيل (القيد الفريد يمنع نسخه مرتين من عمليتين متزامنتين)، ثم يصير

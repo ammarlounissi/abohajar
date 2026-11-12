@@ -160,6 +160,12 @@ class Settings:
     RCLONE_REMOTE = _get("RCLONE_REMOTE", "gdrive").rstrip(":")
     DRIVE_SYNC_INTERVAL_SECONDS = _get_int("DRIVE_SYNC_INTERVAL_SECONDS") or 600
 
+    # إشعارات المتصفح (Web Push). المفتاحان يولَّدان مرة واحدة: venv/bin/python -m scripts.generate_vapid_keys
+    # فارغان = الإشعارات معطّلة (اللوحة تخفي زرها). تغيير المفتاحين يُبطل كل اشتراكات الأجهزة القائمة.
+    VAPID_PUBLIC_KEY = _get("VAPID_PUBLIC_KEY")
+    VAPID_PRIVATE_KEY = _get("VAPID_PRIVATE_KEY")
+    VAPID_SUBJECT = _get("VAPID_SUBJECT", "https://ikhlasdz.com")   # تعريف المرسِل لخدمات الدفع (https: أو mailto:)
+
     REQUIRED = (
         "VERIFY_TOKEN",
         "META_APP_SECRET",
