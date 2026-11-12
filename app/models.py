@@ -92,8 +92,9 @@ class Factory(Base):
     name = Column(String(100), nullable=False)
     kind = Column(String(20), nullable=False, default=FactoryKind.SUPPLIER.value, server_default="supplier")
     activity = Column(Text, nullable=False, default="", server_default="")
+    hashtags = Column(JSON, nullable=True)          # وسوم مفضّلة تُلحق بنص منشوراته: ["#وسم", ...] بلا تكرار
     # قديم: رقم واتساب الأساسي. مصدر الحقيقة لتعريف المصنع في القنوات هو factory_contacts.
-    # فارغ لمساحات الزبائن (لا رقم لها).
+    # اختياري لمساحات الزبائن: يكتبه الزبون من إعدادات الصفحة (customer_captions.update_profile).
     phone_number = Column(String(20), unique=True, index=True, nullable=True)
     address = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)

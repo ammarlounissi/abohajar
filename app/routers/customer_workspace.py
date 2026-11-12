@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
-from app.services import customer_workspaces, post_publisher
+from app.services import customer_captions, customer_workspaces, post_publisher
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
 
@@ -121,3 +121,33 @@ def publish_video(
     view = customer_workspaces.publish_video(db, user.id, service_key, media_id, caption=body.caption)
     background.add_task(post_publisher.publish_claimed_in_background, view["id"])
     return view
+
+
+# --- إعدادات الصفحة ونص المنشور بـ Gemini ---
+
+@router.get("/profile", response_model=schemas.CustomerProfile)
+def get_profile(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """إعدادات الصفحة؛ النشاط الفارغ يُجلب من صفحة فيسبوك (التصنيف والنبذة) ويُحفظ."""
+    return customer_captions.get_profile(db, user.id, service_key)
+
+
+@router.patch("/profile", response_model=schemas.CustomerProfile)
+def update_profile(
+    service_key: str, body: schemas.CustomerProfileUpdate,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """تعديل جزئي لإعدادات الصفحة: يُغيَّر ما أُرسل فقط."""
+    return customer_captions.update_profile(db, user.id, service_key, body.model_dump(exclude_unset=True))
+
+
+@router.post("/captions", response_model=schemas.CustomerCaptionJob, status_code=status.HTTP_202_ACCEPTED)
+def request_caption(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """يضع كتابة الوصف في الطابور ويعيد المهمة فوراً؛ تُتابَع من /captions/{id}. 422 إن لم يكن للصفحة نشاط."""
+    return customer_captions.request_caption(db, user.id, service_key)
+
+
+@router.get("/captions/{job_id}", response_model=schemas.CustomerCaptionJob)
+def get_caption_job(
+    service_key: str, job_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return customer_captions.get_caption_job(db, user.id, service_key, job_id)

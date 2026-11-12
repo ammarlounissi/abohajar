@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import re
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -17,15 +18,30 @@ from app.services.errors import InvalidInputError, NotFoundError
 logger = logging.getLogger(__name__)
 MAX_CONTEXT_TURNS = 5
 SessionFactory = Callable[[], Session]
+# سقف طول الوصف (طلب المستخدم 2026-11-12). رقم واتساب الزبون يُلحق بعده سطراً ثابتاً ولا يُحسب منه.
+MAX_DESCRIPTION_WORDS = 30
 SYSTEM_INSTRUCTION = (
-    "أنت كاتب محتوى للمصنع «{factory_name}». اكتب وصفاً تسويقياً عربياً فقط، صالحاً لمنشور "
-    "على مواقع التواصل، اعتماداً حصراً على نشاط المصنع وسياق المحادثة. استخدم العربية الفصحى "
-    "السليمة من دون خلط لغات أو كلمات أجنبية (إلا اسم علامة تجارية وارد صراحةً). لا تخترع "
-    "أسعاراً أو مواصفات أو منتجات أو مزايا غير مذكورة، ولا تضف كلمات أو موضوعات لا علاقة لها "
-    "بالحجر الطبيعي وحجر البناء. أعد نص المنشور فقط دون مقدمة أو شرح أو عناوين."
+    "أنت كاتب محتوى لـ«{factory_name}». اكتب وصفاً تسويقياً عربياً فقط، صالحاً لمنشور على مواقع "
+    "التواصل، اعتماداً حصراً على النشاط المذكور في بيانات النشاط التجاري وسياق المحادثة، أياً كان "
+    "هذا النشاط. استخدم العربية الفصحى السليمة من دون خلط لغات أو كلمات أجنبية (إلا اسم علامة "
+    "تجارية وارد صراحةً). لا تخترع أسعاراً أو مواصفات أو منتجات أو خدمات أو مزايا غير مذكورة، ولا "
+    "تضف موضوعات لا علاقة لها بهذا النشاط. لا يتجاوز النص {max_words} كلمة بأي حال. أعد نص المنشور "
+    "فقط دون مقدمة أو شرح أو عناوين.\n\n"
+    "الجملة الأولى أهم ما في المنشور، فاجعلها مبتكرة وغير متوقعة ومختلفة في كل مرة: لا تبدأ باسم النشاط "
+    "التجاري، ولا بنوع النشاط (مثل «مخبزة» أو «متجر» أو «مصنع» أو «سوبرماركت»)، ولا بـ«نحن» أو «في». "
+    "اذكر الاسم في الجملة الثانية أو بعدها."
+).replace("{max_words}", str(MAX_DESCRIPTION_WORDS))
+
+# وسوم يقترحها النموذج: تُطلب في نص المنشور للزبون حين لا وسوم في إعدادات صفحته (customer_captions)،
+# وتُفصل عن النص عند تركيب المنشور. وصف الإدارة لا يطلبها (وسومه من factory_reel_posts.suggested_hashtags).
+HASHTAG_INSTRUCTION = (
+    "بعد نص المنشور اكتب سطراً أخيراً منفصلاً فيه من 3 إلى 5 وسوم (هاشتاقات) عربية مناسبة لهذا النشاط "
+    "تحديداً، كل وسم يبدأ بـ # وكلماته موصولة بـ _ (مثل #ملابس_أطفال)، ولا شيء غيرها في ذلك السطر. "
+    "لا تضع وسوماً داخل نص المنشور نفسه. الوسوم لا تُحسب من حد الكلمات."
 )
 
-# مصطلحات المجال: تمنع النموذج من ترجمات خاطئة (سجادة، أثاث، سقف...) وتعرّفه أين يُستعمل الحجر.
+# مصطلحات الحجر: تُضاف لمصانع المورّدين فقط (كلها حجر)، فتمنع ترجمات خاطئة (سجادة، أثاث، سقف...)
+# وتعرّف النموذج أين يُستعمل الحجر. مصانع الزبائن (kind=customer) أنشطتها متنوعة فلا تُضاف لها.
 STONE_TERMINOLOGY = (
     "المصطلحات الصحيحة (مهمة):\n"
     "- الحجر هنا مادة بناء وتكسية ديكورية، وليس أثاثاً ولا قماشاً ولا اشجارا ولا ورق جدران.\n"
@@ -40,25 +56,35 @@ STONE_TERMINOLOGY = (
 
 # تنويع الأوصاف: يُختار عنصر عشوائي من كل قائمة عند كل طلب حتى لا يتكرر الناتج.
 VARIATION_ANGLES = (
-    "جمال الشكل والملمس الطبيعي",
-    "المتانة وطول العمر",
-    "الإحساس الذي يضيفه للمكان (دفء، أصالة، فخامة)",
-    "فكرة استعماله في واجهة أو جدار",
-    "الصنع المحلي والفخر بالمنتج الوطني",
+    "جودة المنتج أو الخدمة وما يميّزها",
+    "المتانة أو الموثوقية",
+    "الإحساس أو الفائدة التي يحصل عليها الزبون",
+    "فكرة استعمال المنتج أو الخدمة في موقف حقيقي",
+    "الصنع أو العمل المحلي والفخر بالمنتج الوطني",
     "دعوة مباشرة للتواصل وطلب المنتج",
 )
+# أساليب الافتتاح تُستعمل بالتناوب لا بالقرعة (turn في _variation_block)، فلا يتكرر أسلوب في وصفين متتاليين.
 VARIATION_OPENINGS = (
-    "سؤال موجّه للقارئ",
-    "جملة قصيرة قوية",
-    "وصف مشهد",
-    "عبارة تشويقية",
-    "ذكر النشاط مباشرة",
+    "سؤال قصير يلامس حاجة يعرفها الزبون",
+    "مشهد قصير من الحياة اليومية يظهر فيه المنتج أو الخدمة",
+    "فعل أمر يدعو القارئ إلى تجربة شيء",
+    "تشبيه أو صورة بلاغية قصيرة",
+    "عبارة تشويقية تثير الفضول ولا تكشف كل شيء",
+    "مخاطبة فئة محددة من الزبائن يناسبها هذا النشاط",
+    "كلمة أو كلمتان قويتان تليهما نقطة",
+    "تعجّب قصير",
+    "مقارنة سريعة بين قبل وبعد",
+    "وعد واضح للزبون",
+    "تفصيلة حسية (لون، ملمس، رائحة، صوت) مما يناسب النشاط",
+    "لحظة أو وقت مناسب لاستعمال المنتج أو الخدمة",
 )
 VARIATION_TONES = ("راقية وهادئة", "حماسية", "دافئة وقريبة من الزبون", "عملية ومباشرة")
-VARIATION_LENGTHS = ("جملتان", "ثلاث جمل", "أربع جمل قصيرة")
+VARIATION_LENGTHS = ("جملة واحدة", "جملتان قصيرتان", "ثلاث جمل قصيرة جداً")
 VARIATION_EMOJI = ("بدون إيموجي", "إيموجي واحد فقط", "إيموجيان كحد أقصى")
 AVOID_PREVIOUS_LIMIT = 5
 AVOID_PREVIOUS_CHARS = 220
+OPENING_KEY_WORDS = 2          # بداية الوصف = أول كلمتين: لا تتكرر بين وصف وما قبله (opening_key)
+REPEAT_CHECK_LIMIT = 10        # كم وصفاً سابقاً يُقارن به الجديد قبل حفظه
 
 # إعدادات توليد أعلى تنوعاً (لا seed ثابت عمداً).
 GENERATION_OPTIONS = {"temperature": 0.9, "top_p": 0.95, "repeat_penalty": 1.15}
@@ -81,28 +107,43 @@ class OllamaUnavailableError(Exception):
         self.retry_after = retry_after
 
 
+_SENTENCE_END = re.compile(r"[.!؟?؛\n]")
+_NOT_WORD = re.compile(r"[^\w\s]")
+
+
+def first_sentence(text: str) -> str:
+    """الجملة الأولى من الوصف (حتى أول . ! ؟ ؛ أو سطر جديد)."""
+    return _SENTENCE_END.split((text or "").strip(), maxsplit=1)[0].strip()
+
+
+def opening_key(text: str) -> str:
+    """أول كلمتين من الوصف بلا ترقيم ولا إيموجي ولا «»: ما يُقارن به تكرار البداية."""
+    words = _NOT_WORD.sub(" ", (text or "").strip()).split()
+    return " ".join(words[:OPENING_KEY_WORDS])
+
+
 def _variation_block(
-    history: list[models.FactoryChatMessage], rng: random.Random,
+    history: list[models.FactoryChatMessage], rng: random.Random, turn: Optional[int] = None,
 ) -> str:
+    """turn: ترتيب هذا الوصف بين أوصاف المصنع، يختار أسلوب الافتتاح بالتناوب (بلا turn: بالقرعة)."""
+    opening = VARIATION_OPENINGS[turn % len(VARIATION_OPENINGS)] if turn is not None else rng.choice(VARIATION_OPENINGS)
     lines = [
         "التنويع (إلزامي):",
         f"- زاوية الوصف: {rng.choice(VARIATION_ANGLES)}",
-        f"- أسلوب الافتتاح: {rng.choice(VARIATION_OPENINGS)}",
+        f"- أسلوب الجملة الأولى: {opening}",
         f"- النبرة: {rng.choice(VARIATION_TONES)}",
-        f"- الطول: {rng.choice(VARIATION_LENGTHS)}",
+        f"- الطول: {rng.choice(VARIATION_LENGTHS)}، وفي كل الأحوال {MAX_DESCRIPTION_WORDS} كلمة على الأكثر",
         f"- {rng.choice(VARIATION_EMOJI)}",
     ]
-    previous = [
-        " ".join(m.response.split())[:AVOID_PREVIOUS_CHARS]
-        for m in history[-AVOID_PREVIOUS_LIMIT:]
-        if m.response and m.response.strip()
-    ]
-    if previous:
-        lines.append(
-            "- لا تبدأ بكلمة أو عبارة وردت في الأوصاف السابقة أدناه، ولا تعد استعمال "
-            "جملها أو تراكيبها:"
-        )
-        lines.extend(f"  * {text}" for text in previous)
+    recent = [m.response for m in history[-AVOID_PREVIOUS_LIMIT:] if m.response and m.response.strip()]
+    if recent:
+        openings = list(dict.fromkeys(first_sentence(text) for text in recent if first_sentence(text)))
+        keys = list(dict.fromkeys(opening_key(text) for text in recent if opening_key(text)))
+        lines.append("- الجمل الأولى في الأوصاف السابقة؛ ممنوع تكرار أي منها أو صياغة قريبة منها:")
+        lines.extend(f"  - {text}" for text in openings)
+        lines.append("- ممنوع أن يبدأ الوصف بأي من: " + "، ".join(f"«{key}»" for key in keys))
+        lines.append("- ولا تعد استعمال جمل الأوصاف السابقة أدناه أو تراكيبها:")
+        lines.extend(f"  * {' '.join(text.split())[:AVOID_PREVIOUS_CHARS]}" for text in recent)
     return "\n".join(lines)
 
 
@@ -111,14 +152,22 @@ def _conversation_messages(
     history: list[models.FactoryChatMessage],
     prompt: str,
     rng: Optional[random.Random] = None,
+    *,
+    hashtags: bool = False,
+    turn: Optional[int] = None,
 ) -> list[dict[str, str]]:
+    """hashtags: يُطلب من النموذج سطر وسوم أخير (HASHTAG_INSTRUCTION). turn: انظر _variation_block."""
     # الأوصاف السابقة تُرسل كقائمة «تجنّب» داخل رسالة النظام وليست أدواراً حوارية،
     # لأن تكرار نفس السؤال مع أجوبته السابقة يدفع النموذج لنسخ الجواب نفسه.
     rng = rng or random.Random()
+    instruction = SYSTEM_INSTRUCTION.replace("{factory_name}", factory.name)
+    if (factory.kind or models.FactoryKind.SUPPLIER.value) == models.FactoryKind.SUPPLIER.value:
+        instruction = f"{instruction}\n\n{STONE_TERMINOLOGY}"
+    if hashtags:
+        instruction = f"{instruction}\n\n{HASHTAG_INSTRUCTION}"
     profile = (
-        f"{SYSTEM_INSTRUCTION.replace('{factory_name}', factory.name)}\n\n{STONE_TERMINOLOGY}"
-        f"\n\nبيانات المصنع:\nالاسم: {factory.name}\n"
-        f"النشاط: {factory.activity or 'غير محدد'}\n\n{_variation_block(history, rng)}"
+        f"{instruction}\n\nبيانات النشاط التجاري:\nالاسم: {factory.name}\n"
+        f"النشاط: {factory.activity or 'غير محدد'}\n\n{_variation_block(history, rng, turn)}"
     )
     return [
         {"role": "system", "content": profile},
@@ -187,7 +236,7 @@ async def _request_gemini(messages: list[dict[str, str]], model: str) -> str:
                     "systemInstruction": {"parts": [{"text": system}]},
                     "contents": contents,
                     "generationConfig": {
-                        "temperature": 0.85,
+                        "temperature": 1.0,     # تنويع أعلى؛ القيمة الافتراضية الموصى بها لـ Gemini
                         "topP": 0.9,
                         "maxOutputTokens": 300,
                     },
@@ -278,7 +327,10 @@ async def generate_reply(
     raise last
 
 
-def enqueue_description_job(db: Session, factory_id: int, model: str) -> models.FactoryDescriptionJob:
+def enqueue_description_job(
+    db: Session, factory_id: int, model: str, *, hashtags: bool = False,
+) -> models.FactoryDescriptionJob:
+    """hashtags: يطلب من النموذج وسوماً مناسبة في سطر أخير (لمنشور الزبون بلا وسوم في إعداداته)."""
     factory = factory_service.get_factory(db, factory_id)
     prompt = (factory.activity or "").strip()
     if not prompt:
@@ -295,7 +347,8 @@ def enqueue_description_job(db: Session, factory_id: int, model: str) -> models.
         .limit(MAX_CONTEXT_TURNS)
         .all()
     ))
-    messages = _conversation_messages(factory, history, prompt)
+    turn = db.query(models.FactoryChatMessage).filter(models.FactoryChatMessage.factory_id == factory_id).count()
+    messages = _conversation_messages(factory, history, prompt, hashtags=hashtags, turn=turn)
     job = models.FactoryDescriptionJob(
         factory_id=factory_id,
         prompt=prompt,
@@ -364,6 +417,7 @@ def process_description_job(
         description = asyncio.run(generate_reply(messages, model, provider=provider)).strip()
         if not description:
             raise OllamaUnavailableError("Ollama returned an empty description")
+        description = _rewrite_if_opening_repeats(job_id, messages, model, provider, description, session_factory)
         now = utc_now()
         with session_factory() as db:
             job = db.get(models.FactoryDescriptionJob, job_id)
@@ -392,6 +446,45 @@ def process_description_job(
         logger.exception("Factory description job %s failed unexpectedly", job_id)
         _fail_description_job(job_id, "حدث خطأ أثناء توليد الوصف؛ راجع سجل العامل", session_factory)
         return False
+
+
+def _previous_opening_keys(job_id: int, session_factory: SessionFactory) -> set:
+    with session_factory() as db:
+        job = db.get(models.FactoryDescriptionJob, job_id)
+        if job is None:
+            return set()
+        rows = (
+            db.query(models.FactoryChatMessage.response)
+            .filter(models.FactoryChatMessage.factory_id == job.factory_id)
+            .order_by(models.FactoryChatMessage.id.desc())
+            .limit(REPEAT_CHECK_LIMIT)
+            .all()
+        )
+    return {opening_key(response) for (response,) in rows if response and opening_key(response)}
+
+
+def _rewrite_if_opening_repeats(
+    job_id: int, messages: list, model: str, provider: str, description: str, session_factory: SessionFactory,
+) -> str:
+    """إن بدأ الوصف بكلمتي وصف سابق للمصنع يُطلب من النموذج إعادة كتابته مرة واحدة بافتتاحية أخرى.
+    فشل إعادة الكتابة أو تكرارها لا يُفشل المهمة: يبقى الأفضل المتاح."""
+    previous = _previous_opening_keys(job_id, session_factory)
+    if opening_key(description) not in previous:
+        return description
+    logger.info("Description job %s repeated an earlier opening; asking for a rewrite", job_id)
+    retry = list(messages) + [
+        {"role": "assistant", "content": description},
+        {"role": "user", "content": (
+            f"هذا الوصف يبدأ بـ«{opening_key(description)}» كما بدأ وصف سابق. أعد كتابته كاملاً بجملة أولى "
+            "مختلفة تماماً ومبتكرة، بالقواعد نفسها، ولا تبدأ بأي من: "
+            + "، ".join(f"«{key}»" for key in sorted(previous))
+        )},
+    ]
+    try:
+        rewritten = asyncio.run(generate_reply(retry, model, provider=provider)).strip()
+    except OllamaUnavailableError:
+        return description
+    return rewritten or description
 
 
 def _fail_description_job(

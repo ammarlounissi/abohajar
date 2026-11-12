@@ -95,7 +95,7 @@ def build_description(factory: models.Factory, text: str) -> str:
     if not body:
         raise InvalidInputError("رد نموذج الذكاء الاصطناعي لا يحتوي نص وصف صالحاً")
     lines = [body]
-    if factory.phone_number:   # مساحة الزبون بلا رقم
+    if factory.phone_number:   # اختياري لمساحة الزبون
         lines.append(f"📲 للطلب أو الاستفسار عبر واتساب: {factory.phone_number}")
     tags = suggested_hashtags(factory, body, model_tags)
     if tags:
