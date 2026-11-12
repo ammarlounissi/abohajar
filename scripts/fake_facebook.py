@@ -108,7 +108,7 @@ def _start_description_worker() -> None:
     import time
 
     from app.core import job_lock
-    from app.services import ollama_chat
+    from app.services import ollama_chat, post_drafts
 
     ollama_chat.recover_interrupted_description_jobs()
 
@@ -120,10 +120,38 @@ def _start_description_worker() -> None:
                     print(f"[fake-facebook] عامل الأوصاف: المهمة {job_id}")
                     ok = ollama_chat.process_description_job(job_id)
                     print(f"[fake-facebook] عامل الأوصاف: المهمة {job_id} {'نجحت' if ok else 'فشلت'}")
+            if job_id is not None:
+                post_drafts.advance_all()          # نص المسودة التالية (النشر الجماعي)
             if job_id is None:
                 time.sleep(1.0)
 
     threading.Thread(target=loop, name="description-worker", daemon=True).start()
+
+
+def _start_scheduled_publisher() -> None:
+    """ما يفعله hadjret-publish.timer على السيرفر (كل دقيقة): ينشر المنشورات المعتمدة التي حان موعدها، بالنشر
+    المقلَّد في هذه العملية. معه تقدّم المسودات المعتمدة (طلب فيديو ما اقترب موعده) كما يفعل عامل الفيديو."""
+    import asyncio
+    import threading
+    import time
+
+    from app.core.database import SessionLocal
+    from app.services import post_drafts, post_publisher
+    from app.services.social import build_publishers
+
+    def loop():
+        while True:
+            time.sleep(30)
+            try:
+                post_drafts.advance_all()
+                with SessionLocal() as db:
+                    summary = asyncio.run(post_publisher.publish_due(db, publishers=build_publishers()))
+                for outcome in summary.outcomes:
+                    print(f"[fake-facebook] النشر المجدول: post={outcome.post_id} status={outcome.status}")
+            except Exception as exc:      # لا يوقف الخادم
+                print(f"[fake-facebook] النشر المجدول: خطأ {exc!r}")
+
+    threading.Thread(target=loop, name="scheduled-publisher", daemon=True).start()
 
 
 class _OfflineClient:
@@ -162,6 +190,7 @@ def build_app():
     facebook_publisher.graph_call = _fake_publish_call
     customer_captions.fetch_page_activity = _fake_page_activity
     _start_description_worker()
+    _start_scheduled_publisher()
 
     @app.middleware("http")
     async def fake_dialog(request, call_next):

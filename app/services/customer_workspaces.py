@@ -9,7 +9,7 @@
 اتفاقية الحفظ: ensure_workspace لا تنفّذ commit (تُستدعى ضمن ربط الصفحة)؛ بقية الدوال تحفظ بنفسها."""
 import io
 import random
-from datetime import timedelta
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
@@ -322,6 +322,8 @@ def _post_view(post: models.Post, media_ids: dict, page_id: str) -> dict:
             or utc_now() - post.claimed_at > timedelta(minutes=settings.PUBLISH_STALE_MINUTES)
         )
         status = "unknown" if stale else "publishing"
+        if post.status == PostStatus.APPROVED and post.scheduled_at and post.scheduled_at > utc_now():
+            status = "scheduled"             # منشور مجدول (النشر الجماعي) ينتظر موعده
     failed = post.status == PostStatus.FAILED
     raw_error = ((delivery.error if delivery else None) or post.error) if failed else None
     remote_id = delivery.remote_id if delivery and delivery.status == DeliveryStatus.PUBLISHED.value else None
@@ -335,6 +337,7 @@ def _post_view(post: models.Post, media_ids: dict, page_id: str) -> dict:
         "error": _friendly_error(raw_error) if failed else None,
         "error_detail": (raw_error or None) and raw_error[:300],
         "published_at": post.published_at,
+        "scheduled_at": post.scheduled_at.replace(tzinfo=timezone.utc) if post.scheduled_at else None,
         "facebook_url": f"https://www.facebook.com/{page_id}/videos/{remote_id}" if remote_id else None,
     }
 

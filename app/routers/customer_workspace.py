@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
-from app.services import customer_captions, customer_workspaces, post_publisher
+from app.services import customer_captions, customer_workspaces, post_drafts, post_publisher
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
 
@@ -151,3 +151,56 @@ def get_caption_job(
     service_key: str, job_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
 ):
     return customer_captions.get_caption_job(db, user.id, service_key, job_id)
+
+
+# --- النشر الجماعي المجدول: مسودات تُراجع ويُوافق عليها، ثم تُرندر وتُنشر في مواعيدها ---
+
+@router.get("/drafts", response_model=schemas.CustomerDrafts)
+def list_drafts(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """المسودات والمنشورات المجدولة والمنشورة حديثاً، مع قيود الجدولة."""
+    return post_drafts.list_drafts(db, user.id, service_key)
+
+
+@router.post("/drafts", response_model=schemas.CustomerDrafts, status_code=status.HTTP_201_CREATED)
+def generate_drafts(
+    service_key: str, body: schemas.CustomerDraftsRequest,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """«توليد 30 مسودة»: مسودة لكل يوم ابتداءً من الغد في الساعة المختارة. لا يُرندر ولا يُنشر شيء قبل الموافقة.
+    نصوصها تُكتب بـ Gemini واحداً بعد واحد (status=writing ثم ready). 422 بلا نشاط أو بلا صور أو فوق الحد."""
+    return post_drafts.generate(db, user.id, service_key, count=body.count, at=body.time)
+
+
+@router.post("/drafts/approve", response_model=schemas.CustomerDrafts)
+def approve_drafts(
+    service_key: str, body: schemas.CustomerDraftsApproval,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """الموافقة على المسودات التي راجعها الزبون (كلها ready)، وتسجيلها في سجل الموافقات."""
+    return post_drafts.approve(db, user.id, service_key, body.ids)
+
+
+@router.patch("/drafts/{draft_id}", response_model=schemas.CustomerDraft)
+def update_draft(
+    service_key: str, draft_id: int, body: schemas.CustomerDraftUpdate,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """تعديل النص (قبل الموافقة) أو الموعد (قبل النشر، بقيود الجدولة)."""
+    return post_drafts.update_draft(db, user.id, service_key, draft_id, body.model_dump(exclude_unset=True))
+
+
+@router.post("/drafts/{draft_id}/caption", response_model=schemas.CustomerDraft)
+def rewrite_draft_caption(
+    service_key: str, draft_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """نص جديد من Gemini لمسودة لم يُوافق عليها."""
+    return post_drafts.rewrite_caption(db, user.id, service_key, draft_id)
+
+
+@router.delete("/drafts/{draft_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_draft(
+    service_key: str, draft_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """قبل الموافقة تُحذف المسودة؛ بعدها وقبل النشر يُلغى منشورها."""
+    post_drafts.delete_draft(db, user.id, service_key, draft_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

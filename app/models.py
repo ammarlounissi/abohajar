@@ -208,6 +208,60 @@ class FactoryReelSchedule(Base):
     last_reel_request = relationship("FactoryReelRequest")
 
 
+class PostDraft(Base):
+    """مسودة منشور فيديو مجدول لصفحة زبون (النشر الجماعي: «توليد 30 مسودة» ثم المراجعة والموافقة).
+
+    كل ما يُنشر محفوظ هنا قبل الموافقة كما يراه الزبون في المعاينة: القالب والصوت والصور بترتيبها ونص
+    Gemini كاملاً وموعد النشر. لا يُرندر الفيديو ولا يُنشأ منشور إلا بعد موافقة صاحب الصفحة.
+    الحالات: writing (Gemini يكتب النص) -> ready (بانتظار المراجعة) -> approved (وافق، الفيديو لم يُطلب)
+    -> rendering (مهمة الفيديو) -> scheduled (المنشور posts.post_id معتمد بموعده، والناشر ينشره حين يحين).
+    failed: فشل التجهيز أو فات الموعد (يُعاد بتغيير الموعد). cancelled: ألغاه الزبون بعد الموافقة.
+    حالة النشر نفسها (قيد النشر، نُشر، فشل) تُقرأ من المنشور."""
+    __tablename__ = "post_drafts"
+
+    id = Column(Integer, primary_key=True)
+    factory_id = Column(Integer, ForeignKey("factories.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)          # من طلب توليدها
+    status = Column(String(20), nullable=False, default="writing", index=True)
+    template = Column(String(40), nullable=False)
+    audio = Column(String(120), nullable=True)
+    image_ids = Column(JSON, nullable=False, default=list)                    # صور المكتبة بترتيب المعاينة
+    caption = Column(Text, nullable=True)                                     # النص كما سيُنشر حرفياً
+    caption_job_id = Column(Integer, ForeignKey("factory_description_jobs.id"), nullable=True)
+    caption_error = Column(Text, nullable=True)
+    scheduled_at = Column(DateTime, nullable=False, index=True)               # UTC
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    video_job_id = Column(Integer, ForeignKey("factory_video_jobs.id"), nullable=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+    factory = relationship("Factory")
+    caption_job = relationship("FactoryDescriptionJob")
+    video_job = relationship("FactoryVideoJob")
+    post = relationship("Post")
+
+
+class PostDraftApproval(Base):
+    """سجل موافقة لا يُعدَّل: من وافق، ومتى، وعلى أي نسخة بالضبط (النص وبصمته، الصور، القالب، الصوت، الموعد).
+    صف لكل موافقة، ولكل تغيير موعد بعدها. يثبت لـ Meta أن كل منشور مجدول نُشر بموافقة صاحب الصفحة."""
+    __tablename__ = "post_draft_approvals"
+
+    id = Column(Integer, primary_key=True)
+    draft_id = Column(Integer, ForeignKey("post_drafts.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    page_id = Column(String(100), nullable=False)
+    approved_at = Column(DateTime, nullable=False, default=utc_now)
+    caption = Column(Text, nullable=False)
+    caption_sha256 = Column(String(64), nullable=False)
+    template = Column(String(40), nullable=False)
+    audio = Column(String(120), nullable=True)
+    image_ids = Column(JSON, nullable=False)
+    scheduled_at = Column(DateTime, nullable=False)
+
+
 class DriveSyncedFile(Base):
     """ملف صورة من مجلد Google Drive المشارَك مع المشروع، ومعالجته في مكتبة المصنع.
     الصف يُنشأ بحالة copying قبل التنزيل (القيد الفريد يمنع نسخه مرتين من عمليتين متزامنتين)، ثم يصير

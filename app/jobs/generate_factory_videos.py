@@ -9,9 +9,11 @@ import signal
 import time
 
 from app.core import job_lock
-from app.services import factory_reel_requests, factory_video_jobs
+from app.services import factory_reel_requests, factory_video_jobs, post_drafts
 
 POLL_INTERVAL_SECONDS = 1.0
+# كل دقيقة وهو خامل: يطلب فيديو المسودات المعتمدة التي اقترب موعدها (النشر الجماعي المجدول)
+DRAFTS_INTERVAL_SECONDS = 60.0
 _stop_requested = False
 
 
@@ -26,6 +28,10 @@ def _finalize_reel_requests() -> None:
         factory_reel_requests.finalize_pending()
     except Exception:
         logging.exception("Finalizing reel requests failed")
+    try:
+        post_drafts.advance_all()
+    except Exception:
+        logging.exception("Advancing post drafts failed")
 
 
 def main(argv=None) -> int:
@@ -44,7 +50,11 @@ def main(argv=None) -> int:
     if recovered:
         logging.warning("Marked %d interrupted video job(s) as failed", recovered)
 
+    last_drafts_check = 0.0
     while not _stop_requested:
+        if time.monotonic() - last_drafts_check >= DRAFTS_INTERVAL_SECONDS:
+            last_drafts_check = time.monotonic()
+            _finalize_reel_requests()
         # قفل مشترك مع العامل الآخر: مهمة ثقيلة واحدة فقط في كل لحظة، والأخرى تنتظر دورها في الطابور
         with job_lock.try_acquire() as acquired:
             job_id = factory_video_jobs.claim_next_video_job() if acquired else None

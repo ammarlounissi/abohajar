@@ -9,7 +9,7 @@ import signal
 import time
 
 from app.core import job_lock
-from app.services import factory_reel_requests, ollama_chat
+from app.services import factory_reel_requests, ollama_chat, post_drafts
 
 POLL_INTERVAL_SECONDS = 1.0
 _stop_requested = False
@@ -26,6 +26,10 @@ def _finalize_reel_requests() -> None:
         factory_reel_requests.finalize_pending()
     except Exception:
         logging.exception("Finalizing reel requests failed")
+    try:
+        post_drafts.advance_all()          # نص المسودة التالية في النشر الجماعي
+    except Exception:
+        logging.exception("Advancing post drafts failed")
 
 
 def main(argv=None) -> int:
