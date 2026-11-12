@@ -8,9 +8,11 @@
   ],
   "pages": [
     {"id": "700000000001", "name": "متجر الإخلاص", "access_token": "fake-page-token-1",
-     "category": "متجر ملابس", "about": "ملابس أطفال ونساء بأسعار مناسبة، توصيل لكل الولايات"},
+     "category": "متجر ملابس", "about": "ملابس أطفال ونساء بأسعار مناسبة، توصيل لكل الولايات",
+     "cover": true, "picture": true, "cover_offset_y": 40, "followers": 1520},
     {"id": "700000000002", "name": "حجرة بلادي للتجربة", "access_token": "fake-page-token-2",
-     "category": "مواد البناء", "about": "حجر طبيعي للواجهات والجدران"},
+     "category": "مواد البناء", "about": "حجر طبيعي للواجهات والجدران",
+     "picture": true, "followers": 87},
     {"id": "700000000003", "name": "صفحة ثالثة", "access_token": "fake-page-token-3"}
   ]
 }

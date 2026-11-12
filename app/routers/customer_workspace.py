@@ -12,7 +12,7 @@ from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
 from app.services import (
-    customer_captions, customer_workspaces, post_drafts, post_publisher, push_notifications,
+    customer_captions, customer_overview, customer_workspaces, post_drafts, post_publisher, push_notifications,
 )
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
@@ -21,6 +21,12 @@ router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspa
 @router.get("/workspace", response_model=schemas.CustomerWorkspaceResponse)
 def get_workspace(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
     return customer_workspaces.describe(db, user.id, service_key)
+
+
+@router.get("/overview", response_model=schemas.CustomerOverview)
+def get_overview(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """رئيسية اللوحة: مظهر الصفحة في فيسبوك (غلاف وبروفيل) وأرقام ما ينتظر الزبون وما أُنجز."""
+    return customer_overview.overview(db, user.id, service_key)
 
 
 @router.get("/media", response_model=List[schemas.CustomerMediaResponse])

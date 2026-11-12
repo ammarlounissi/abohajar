@@ -48,7 +48,7 @@ TEST_MESSAGE_TITLE = "الإشعارات تعمل"
 class Message:
     title: str
     body: str
-    page: str = ""          # الصفحة الفرعية في لوحة الخدمة: "" للرئيسية، أو "schedule"
+    page: str = ""          # القسم في لوحة الخدمة: "" للرئيسية، "schedule" للمجدول، "videos" للنشر اليدوي
     tag: str = ""           # إشعار بالوسم نفسه يحل محل السابق على الجهاز بدل أن يتراكم
     ttl: int = 24 * 3600    # كم تحتفظ به خدمة الدفع إن كان الجهاز مطفأً
 
@@ -293,11 +293,16 @@ def _excerpt(text: Optional[str], limit: int = 90) -> str:
     return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
 
 
+def _post_section(scheduled: bool) -> str:
+    """قسم اللوحة الذي يُفتح من إشعار منشور: المجدول، أو «توليد الفيديو» حيث يُنشر الفيديو يدوياً."""
+    return "schedule" if scheduled else "videos"
+
+
 def post_published(post_id: int, caption: Optional[str], scheduled: bool) -> Message:
     return Message("نُشر منشورك على صفحتك", _excerpt(caption) or "نُشر الفيديو على صفحتك في فيسبوك.",
-                   page="schedule" if scheduled else "", tag=f"post-{post_id}", ttl=6 * 3600)
+                   page=_post_section(scheduled), tag=f"post-{post_id}", ttl=6 * 3600)
 
 
 def post_failed(post_id: int, scheduled: bool) -> Message:
     body = "افتح اللوحة واختر موعداً جديداً لإعادة المحاولة." if scheduled else "افتح اللوحة لإعادة المحاولة."
-    return Message("تعذّر نشر منشور على صفحتك", body, page="schedule" if scheduled else "", tag=f"post-{post_id}")
+    return Message("تعذّر نشر منشور على صفحتك", body, page=_post_section(scheduled), tag=f"post-{post_id}")

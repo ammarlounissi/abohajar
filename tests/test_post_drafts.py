@@ -29,7 +29,9 @@ def iso(moment: datetime) -> str:
     return moment.replace(tzinfo=timezone.utc).isoformat()
 
 
-class PostDraftTests(WorkspaceTestBase):
+class DraftTestBase(WorkspaceTestBase):
+    """أدوات النشر المجدول (ساعة ثابتة، فيديو وأوصاف مقلَّدة). تستعملها اختبارات ملخص اللوحة أيضاً."""
+
     def setUp(self):
         super().setUp()
         audio_root = Path(self.tmp.name) / "audio"
@@ -108,6 +110,8 @@ class PostDraftTests(WorkspaceTestBase):
         self.assertTrue(all(d["status"] == "ready" for d in drafts))
         return drafts
 
+
+class PostDraftTests(DraftTestBase):
     # ───── الوصول ─────
 
     def test_requires_login_and_a_linked_page(self):

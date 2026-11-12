@@ -18,6 +18,10 @@
 
 النشر على الصفحة مقلَّد أيضاً: لا يخرج أي طلب، وينجح بعد ثوانٍ بمعرّف وهمي (أو يفشل بـ publish_error).
 
+مظهر الصفحة في رئيسية اللوحة: "cover" و"picture" (true = صورة مولَّدة يخدمها هذا الخادم على
+/fake-facebook/pages/<id>/cover.png و picture.png، أو رابط صورة)، و"cover_offset_y" و"followers". صفحة
+بلاها = صفحة بلا غلاف أو بلا صورة.
+
 نشاط الصفحة (لكتابة الوصف بـ Gemini): يُقرأ من "category" و"about" للصفحة في ملف السيناريو (صفحة بلاهما
 = فيسبوك لم يعطِ شيئاً). عامل الأوصاف يعمل داخل هذه العملية على القاعدة نفسها، والنموذج حقيقي:
 Gemini بمفتاح GEMINI_API_KEY من .env.
@@ -102,6 +106,56 @@ def _fake_page_activity(page_id, token):
     return activity
 
 
+FAKE_ORIGIN = "http://localhost:8000"
+
+
+def _fake_page_appearance(page_id, token):
+    """بديل جلب الغلاف وصورة البروفيل من فيسبوك: من ملف السيناريو."""
+    page = next((item for item in _scenario()["pages"] if item["id"] == page_id), None)
+    if page is None:
+        return None
+
+    def image(kind):
+        value = page.get(kind)
+        if value is True:
+            return f"{FAKE_ORIGIN}/fake-facebook/pages/{page_id}/{kind}.png"
+        return value if isinstance(value, str) else None
+
+    return {
+        "picture_url": image("picture"), "cover_url": image("cover"),
+        "cover_offset_y": int(page.get("cover_offset_y", 50)), "followers": page.get("followers"),
+        "link": f"https://www.facebook.com/{page_id}",
+    }
+
+
+def _fake_page_image(page_id: str, kind: str) -> bytes:
+    """صورة مولَّدة بلا أي ملف: غلاف بتدرّج ودوائر، أو بروفيل دائري الخلفية. اللون من رقم الصفحة."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    seed = sum(map(ord, page_id))
+    palettes = [((13, 27, 62), (20, 184, 166)), ((76, 29, 149), (236, 72, 153)), ((120, 53, 15), (245, 158, 11))]
+    start, end = palettes[seed % len(palettes)]
+    size = (1640, 624) if kind == "cover" else (320, 320)
+    img = Image.new("RGB", size)
+    draw = ImageDraw.Draw(img)
+    for x in range(size[0]):
+        t = x / (size[0] - 1)
+        draw.line([(x, 0), (x, size[1])], fill=tuple(int(a + (b - a) * t) for a, b in zip(start, end)))
+    if kind == "cover":
+        for i in range(9):
+            r = 40 + (seed * (i + 3)) % 160
+            cx, cy = (seed * (i + 7) * 97) % size[0], (seed * (i + 5) * 53) % size[1]
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(255, 255, 255), width=3)
+    else:
+        draw.rounded_rectangle([90, 110, 230, 230], radius=18, fill=(255, 255, 255))   # حقيبة متجر بسيطة
+        draw.arc([125, 70, 195, 150], 180, 360, fill=(255, 255, 255), width=10)
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
 def _start_description_worker() -> None:
     """عامل الأوصاف (app.jobs.generate_factory_descriptions) في خيط داخل هذه العملية وعلى قاعدتها."""
     import threading
@@ -179,7 +233,9 @@ def build_app():
 
     from app.main import app
     from app.routers import auth
-    from app.services import customer_captions
+    from fastapi import Response
+
+    from app.services import customer_captions, page_appearance
     from app.services.social import facebook as facebook_publisher
 
     auth._graph_get = _fake_graph_get
@@ -189,6 +245,14 @@ def build_app():
 
     facebook_publisher.graph_call = _fake_publish_call
     customer_captions.fetch_page_activity = _fake_page_activity
+    page_appearance.fetch_page_appearance = _fake_page_appearance
+
+    @app.get("/fake-facebook/pages/{page_id}/{kind}.png", include_in_schema=False)
+    def fake_page_image(page_id: str, kind: str):
+        if kind not in ("cover", "picture"):
+            return Response(status_code=404)
+        return Response(_fake_page_image(page_id, kind), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
     _start_description_worker()
     _start_scheduled_publisher()
 
