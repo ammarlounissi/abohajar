@@ -620,16 +620,20 @@ class CustomerDraftImage(BaseModel):
 class CustomerDraft(BaseModel):
     """مسودة منشور فيديو مجدول، بكل ما سيُنشر كما يُعاين. الأوقات UTC (بلاحقة Z).
     status: writing (Gemini يكتب) · ready (بانتظار المراجعة) · approved (وافق، الفيديو ينتظر دوره قبل الموعد)
-    · rendering · scheduled (جاهز وينتظر موعده) · publishing · published · failed.
+    · rendering · scheduled (جاهز وينتظر موعده) · publishing · published · failed · cancelled (تُسترجع).
     images: صور المكتبة بترتيبها (ما حُذف منها لا يظهر). caption_error: تعذّرت كتابة النص فيكتبه الزبون."""
     id: int
-    status: Literal["writing", "ready", "approved", "rendering", "scheduled", "publishing", "published", "failed"]
+    status: Literal[
+        "writing", "ready", "approved", "rendering", "scheduled", "publishing", "published", "failed", "cancelled",
+    ]
     template: str
     audio: Optional[str] = None
     images: List[CustomerDraftImage]
     caption: str
     caption_error: Optional[str] = None
     scheduled_at: datetime
+    planned_at: datetime                        # الموعد الأصلي عند التوليد (للعودة إليه)
+    cancelled_at: Optional[datetime] = None
     approved_at: Optional[datetime] = None
     error: Optional[str] = None
     video_url: Optional[str] = None

@@ -23,6 +23,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import models
@@ -209,7 +210,7 @@ def generate(db: Session, user_id: int, service_key: str, *, count: int, at: str
     for index in range(count):
         db.add(models.PostDraft(
             factory_id=factory.id, user_id=user_id, status=WRITING, template=templates[index].id,
-            audio=audio[index], image_ids=images[index], scheduled_at=slots[index],
+            audio=audio[index], image_ids=images[index], scheduled_at=slots[index], planned_at=slots[index],
         ))
     db.commit()
     advance_captions(db, factory.id)
@@ -387,6 +388,8 @@ def _view(draft: models.PostDraft, images: dict, page_id: str) -> dict:
             status, error = FAILED, "أُوقف هذا المنشور"
     elif draft.status == _FINALIZING:
         status = RENDERING
+    elif draft.status == CANCELLED:
+        error = None
     return {
         "id": draft.id,
         "status": status,
@@ -396,6 +399,8 @@ def _view(draft: models.PostDraft, images: dict, page_id: str) -> dict:
         "caption": draft.caption or "",
         "caption_error": draft.caption_error,
         "scheduled_at": _utc(draft.scheduled_at),
+        "planned_at": _utc(draft.planned_at or draft.scheduled_at),
+        "cancelled_at": _utc(draft.cancelled_at),
         "approved_at": _utc(draft.approved_at),
         "error": error,
         "video_url": video_url,
@@ -405,15 +410,19 @@ def _view(draft: models.PostDraft, images: dict, page_id: str) -> dict:
 
 
 def list_drafts(db: Session, user_id: int, service_key: str, *, advance: bool = True) -> dict:
-    """المسودات والمجدولة والمنشورة في آخر 30 يوماً، الأقرب موعداً أولاً."""
+    """المسودات والمجدولة والمنشورة في آخر 30 يوماً، والملغاة في آخر 30 يوماً، الأقرب موعداً أولاً."""
     workspace = customer_workspaces.current_workspace(db, user_id, service_key)
     factory_id = workspace.factory_id
     if advance:                                       # شبكة أمان إن كان العاملان متوقفين لحظةً
         advance_captions(db, factory_id)
         advance_renders(db, factory_id)
+    since = utc_now() - PUBLISHED_VISIBLE
     drafts = db.query(models.PostDraft).filter(
-        models.PostDraft.factory_id == factory_id, models.PostDraft.status != CANCELLED,
-        models.PostDraft.scheduled_at >= utc_now() - PUBLISHED_VISIBLE,
+        models.PostDraft.factory_id == factory_id,
+        or_(
+            and_(models.PostDraft.status != CANCELLED, models.PostDraft.scheduled_at >= since),
+            and_(models.PostDraft.status == CANCELLED, models.PostDraft.cancelled_at >= since),
+        ),
     ).order_by(models.PostDraft.scheduled_at, models.PostDraft.id).all()
     wanted = {media_id for draft in drafts for media_id in draft.image_ids or []}
     images = dict(db.query(models.Media.id, models.Media.url).filter(
@@ -501,20 +510,48 @@ def rewrite_caption(db: Session, user_id: int, service_key: str, draft_id: int) 
 
 
 def delete_draft(db: Session, user_id: int, service_key: str, draft_id: int) -> None:
-    """قبل الموافقة: تُحذف. بعدها وقبل النشر: تُلغى ويُوقف منشورها. المنشور فعلاً لا يُحذف من هنا."""
+    """تُلغى المسودة (قبل الموافقة أو بعدها وقبل النشر) ويُوقف منشورها إن وُجد. لا يُحذف الصف: تظهر في
+    «الملغاة» 30 يوماً ويسترجعها الزبون. المنشور فعلاً لا يُلغى من هنا."""
     workspace = customer_workspaces.current_workspace(db, user_id, service_key)
     draft = _draft(db, workspace.factory_id, draft_id)
-    if draft.status in _PENDING_REVIEW:
-        db.delete(draft)
-        db.commit()
-        return
     post = draft.post
     if post is not None and post.status in (PostStatus.PUBLISHING, PostStatus.PUBLISHED):
         raise InvalidInputError("نُشر هذا المنشور أو هو قيد النشر الآن. احذفه من صفحتك على فيسبوك إن أردت.")
     if post is not None:
         post.status = PostStatus.ARCHIVED          # الناشر لا يلمس المؤرشف
-    draft.status = CANCELLED
+    draft.status, draft.cancelled_at = CANCELLED, utc_now()
     db.commit()
+
+
+def restore_draft(db: Session, user_id: int, service_key: str, draft_id: int) -> dict:
+    """يعيد مسودة ملغاة إلى «بانتظار المراجعة»، ولو كانت موافقاً عليها: تُراجع ويُوافق عليها من جديد.
+    إن لم يعد موعدها صالحاً (فات، أو أخذ يومَه منشور آخر) تُنقل إلى أول يوم فارغ في الساعة نفسها."""
+    workspace = customer_workspaces.current_workspace(db, user_id, service_key)
+    factory_id = workspace.factory_id
+    draft = db.query(models.PostDraft).filter(
+        models.PostDraft.id == draft_id, models.PostDraft.factory_id == factory_id,
+        models.PostDraft.status == CANCELLED,
+    ).first()
+    if draft is None:
+        raise NotFoundError("المسودة الملغاة غير موجودة؛ حدّث الصفحة")
+    if _count_pending(db, factory_id) >= MAX_OPEN:
+        raise InvalidInputError(f"لديك {MAX_OPEN} مسودة بانتظار المراجعة. راجعها أو احذف بعضها أولاً.")
+    occupied = _occupied(db, factory_id)
+    try:
+        check_slot(draft.scheduled_at, occupied)
+    except InvalidInputError:
+        hour = (draft.planned_at or draft.scheduled_at).replace(tzinfo=timezone.utc).astimezone(tz()).time()
+        draft.scheduled_at = plan_slots(1, hour, occupied)[0]
+    needs_text = not (draft.caption or "").strip() and draft.caption_error is None
+    draft.status = WRITING if needs_text else READY
+    if needs_text:
+        draft.caption_job_id = None
+    draft.approved_at = draft.approved_by = draft.cancelled_at = draft.error = None
+    draft.video_job, draft.post = None, None
+    db.commit()
+    advance_captions(db, factory_id)
+    db.refresh(draft)
+    return _one(db, user_id, service_key, draft)
 
 
 # ───── الموافقة ─────

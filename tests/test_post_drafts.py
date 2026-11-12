@@ -224,7 +224,9 @@ class PostDraftTests(WorkspaceTestBase):
         self.write_captions()
         self.assertEqual(self.drafts(client)[1]["caption"], "نص4 فريد للمنشور")
         self.assertEqual(client.delete(f"{BASE}/drafts/{second['id']}").status_code, 204)
-        self.assertEqual(len(self.drafts(client)), 2)
+        statuses = {d["id"]: d["status"] for d in self.drafts(client)}
+        self.assertEqual(statuses[second["id"]], "cancelled")          # يبقى في «الملغاة»
+        self.assertEqual(sorted(statuses.values()), ["cancelled", "ready", "ready"])
 
     def test_reschedule_respects_the_spam_rules(self):
         client = self.ready_client()
@@ -327,7 +329,7 @@ class PostDraftTests(WorkspaceTestBase):
         self.now = NOW + timedelta(hours=20)
         self.render_all()
         self.assertEqual(client.delete(f"{BASE}/drafts/{draft['id']}").status_code, 204)
-        self.assertEqual(self.drafts(client), [])
+        self.assertEqual([d["status"] for d in self.drafts(client)], ["cancelled"])
         with self.Session() as db:
             self.assertEqual(db.query(models.Post).one().status, PostStatus.ARCHIVED)
 
@@ -366,6 +368,75 @@ class PostDraftTests(WorkspaceTestBase):
         res = client.post(f"{BASE}/drafts/approve", json={"ids": [draft["id"]]})
         self.assertEqual(res.status_code, 422)
         self.assertIn("إعادة ربط", res.json()["detail"])
+
+
+    # ───── الموعد الأصلي والملغاة ─────
+
+    def test_planned_at_keeps_the_original_time_after_rescheduling(self):
+        client = self.ready_client()
+        first = self.ready_drafts(client, 1)[0]
+        self.assertEqual(first["planned_at"], first["scheduled_at"])
+        moved = (local(first["scheduled_at"]) + timedelta(days=2)).isoformat()
+        view = client.patch(f"{BASE}/drafts/{first['id']}", json={"scheduled_at": moved}).json()
+        self.assertNotEqual(view["scheduled_at"], first["scheduled_at"])
+        self.assertEqual(view["planned_at"], first["planned_at"])
+        back = client.patch(f"{BASE}/drafts/{first['id']}", json={"scheduled_at": first["planned_at"]})
+        self.assertEqual(back.status_code, 200, back.text)
+        self.assertEqual(back.json()["scheduled_at"], first["scheduled_at"])
+
+    def test_cancelled_draft_is_restored_for_review(self):
+        client = self.ready_client()
+        draft = self.ready_drafts(client, 1)[0]
+        client.delete(f"{BASE}/drafts/{draft['id']}")
+        self.assertEqual(client.patch(f"{BASE}/drafts/{draft['id']}", json={"caption": "x"}).status_code, 404)
+        res = client.post(f"{BASE}/drafts/{draft['id']}/restore")
+        self.assertEqual(res.status_code, 200, res.text)
+        view = res.json()
+        self.assertEqual((view["status"], view["caption"], view["scheduled_at"]),
+                         ("ready", draft["caption"], draft["scheduled_at"]))
+        self.assertIsNone(view["cancelled_at"])
+        self.assertEqual(client.post(f"{BASE}/drafts/{draft['id']}/restore").status_code, 404)  # ليس ملغى
+
+    def test_restored_approved_post_needs_approval_again(self):
+        client = self.ready_client()
+        draft = self.ready_drafts(client, 1)[0]
+        client.post(f"{BASE}/drafts/approve", json={"ids": [draft["id"]]})
+        self.now = NOW + timedelta(hours=20)
+        self.render_all()
+        client.delete(f"{BASE}/drafts/{draft['id']}")
+        view = client.post(f"{BASE}/drafts/{draft['id']}/restore").json()
+        self.assertEqual(view["status"], "ready")
+        self.assertIsNone(view["approved_at"])
+        with self.Session() as db:
+            self.assertEqual(db.query(models.Post).one().status, PostStatus.ARCHIVED)   # المنشور القديم لا يعود
+        res = client.post(f"{BASE}/drafts/approve", json={"ids": [draft["id"]]})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.render_all()
+        self.assertEqual(self.drafts(client)[0]["status"], "scheduled")
+        with self.Session() as db:
+            self.assertEqual(db.query(models.Post).filter(models.Post.status == PostStatus.APPROVED).count(), 1)
+
+    def test_restore_moves_a_slot_that_was_taken_meanwhile(self):
+        client = self.ready_client()
+        first = self.ready_drafts(client, 1)[0]
+        client.delete(f"{BASE}/drafts/{first['id']}")
+        second = self.generate(client, 1, at="18:00")[0]          # يأخذ يوم المسودة الملغاة
+        self.assertEqual(local(second["scheduled_at"]).date(), local(first["scheduled_at"]).date())
+        client.patch(f"{BASE}/drafts/{second['id']}", json={
+            "scheduled_at": (local(first["scheduled_at"]) - timedelta(hours=1)).isoformat(),
+        })
+        view = client.post(f"{BASE}/drafts/{first['id']}/restore").json()
+        moved = local(view["scheduled_at"])
+        self.assertEqual((moved.hour, moved.minute), (20, 0))
+        self.assertGreater(moved.date(), local(first["scheduled_at"]).date())
+        self.assertEqual(view["planned_at"], first["planned_at"])
+
+    def test_cancelled_drafts_disappear_after_30_days(self):
+        client = self.ready_client()
+        draft = self.ready_drafts(client, 1)[0]
+        client.delete(f"{BASE}/drafts/{draft['id']}")
+        self.now = NOW + timedelta(days=31)
+        self.assertEqual(self.drafts(client), [])
 
 
 class SlotRuleTests(unittest.TestCase):

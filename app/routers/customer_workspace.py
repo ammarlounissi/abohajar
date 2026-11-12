@@ -201,6 +201,14 @@ def rewrite_draft_caption(
 def delete_draft(
     service_key: str, draft_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
 ):
-    """قبل الموافقة تُحذف المسودة؛ بعدها وقبل النشر يُلغى منشورها."""
+    """تُلغى المسودة ويُوقف منشورها (قبل النشر). تبقى في الملغاة 30 يوماً وتُسترجع بـ /restore."""
     post_drafts.delete_draft(db, user.id, service_key, draft_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/drafts/{draft_id}/restore", response_model=schemas.CustomerDraft)
+def restore_draft(
+    service_key: str, draft_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """يعيد مسودة ملغاة إلى «بانتظار المراجعة» (تُوافق عليها من جديد)، وينقل موعدها إن لم يعد صالحاً."""
+    return post_drafts.restore_draft(db, user.id, service_key, draft_id)

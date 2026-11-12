@@ -18,7 +18,7 @@
 - العقد (تحت `/api/services/{service_key}`، بجلسة الزبون):
   `GET /drafts` ← `{drafts: [...], rules: {...}}` · `POST /drafts` `{count 1–30, time "HH:MM"}` ← 201 بالقائمة ·
   `PATCH /drafts/{id}` `{caption?, scheduled_at? (بمنطقة زمنية)}` · `POST /drafts/{id}/caption` نص جديد ·
-  `DELETE /drafts/{id}` (قبل الموافقة حذف، بعدها إلغاء ويُؤرشف المنشور) · `POST /drafts/approve` `{ids}`.
+  `DELETE /drafts/{id}` (إلغاء يُسترجع، ويُؤرشف المنشور إن وُجد) · `POST /drafts/{id}/restore` · `POST /drafts/approve` `{ids}`.
   حالات المسودة: writing, ready, approved, rendering, scheduled, publishing, published, failed. الأوقات UTC بلاحقة Z.
   `GET /videos/posts` صار يعيد `scheduled` و`scheduled_at` للفيديو المجدول (كان يظهر «جارٍ النشر»).
 - الخلفية: `app/services/post_drafts.py`، الـ migration `b9e4c2d7a1f6` (جدولا `post_drafts` و`post_draft_approvals`).
@@ -28,13 +28,18 @@
   وزر «النشر المجدول» في اللوحة وبطاقته. كل مسودة بشكل منشور فيسبوك (الرأس، النص مع «عرض المزيد»، معاينة
   Remotion تُحمَّل عند الضغط لبطاقة واحدة، شريط التفاعل)، مع «شاهدته» وعدّاد المشاهدة، ومربع «راجعت وأوافق»
   قبل زر الموافقة.
-- للنشر: `alembic upgrade head` (حتى `b9e4c2d7a1f6`) وإعادة تشغيل `hadjret-video-worker` و`hadjret-description-worker`
+- ملاحظات المستخدم (2026-11-12): زر «↺ العودة إلى الموعد الأصلي» في نموذج تغيير الموعد (`post_drafts.planned_at`
+  = موعد التوزيع عند التوليد، ويظهر تحت الموعد إن تغيّر)، والحذف صار إلغاءً لا يحذف الصف (`cancelled_at`): قسم
+  «الملغاة» أسفل الصفحة 30 يوماً، و`POST /drafts/{id}/restore` يعيدها إلى «بانتظار المراجعة» (ولو كانت موافقاً
+  عليها: تُوافق من جديد، والمنشور القديم يبقى مؤرشفاً)، وينقل موعدها إلى أول يوم فارغ بالساعة نفسها إن لم يعد
+  صالحاً. الـ migration الثانية `c4f1a8e2d6b3`. المسودتان 3 و11 في `fake_facebook.db` حُذفتا نهائياً بالكود القديم.
+- للنشر: `alembic upgrade head` (حتى `c4f1a8e2d6b3`) وإعادة تشغيل `hadjret-video-worker` و`hadjret-description-worker`
   (كود العاملين تغيّر). لا متغير بيئة جديد.
 
 ## الخلفية (FastAPI)
 - [x] Schema مكتوب (`CustomerDraft`, `CustomerDraftsRequest`, `CustomerDraftUpdate`, `CustomerDraftsApproval`)
 - [x] Endpoint جاهز (`services/post_drafts.py`، `routers/customer_workspace.py`)
-- [x] الاختبار مرّ ✓ (`tests/test_post_drafts.py`: 21، والحزمة كلها 496)
+- [x] الاختبار مرّ ✓ (`tests/test_post_drafts.py`: 26، والحزمة كلها 501)
 
 ## الواجهة (Next.js)
 - [x] Types معرّفة (`features/service-dashboard/drafts.ts`)

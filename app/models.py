@@ -215,7 +215,8 @@ class PostDraft(Base):
     Gemini كاملاً وموعد النشر. لا يُرندر الفيديو ولا يُنشأ منشور إلا بعد موافقة صاحب الصفحة.
     الحالات: writing (Gemini يكتب النص) -> ready (بانتظار المراجعة) -> approved (وافق، الفيديو لم يُطلب)
     -> rendering (مهمة الفيديو) -> scheduled (المنشور posts.post_id معتمد بموعده، والناشر ينشره حين يحين).
-    failed: فشل التجهيز أو فات الموعد (يُعاد بتغيير الموعد). cancelled: ألغاه الزبون بعد الموافقة.
+    failed: فشل التجهيز أو فات الموعد (يُعاد بتغيير الموعد). cancelled: حذفها الزبون أو ألغى نشرها (قبل
+    الموافقة أو بعدها)، وتبقى ليسترجعها فتعود بانتظار المراجعة.
     حالة النشر نفسها (قيد النشر، نُشر، فشل) تُقرأ من المنشور."""
     __tablename__ = "post_drafts"
 
@@ -230,6 +231,8 @@ class PostDraft(Base):
     caption_job_id = Column(Integer, ForeignKey("factory_description_jobs.id"), nullable=True)
     caption_error = Column(Text, nullable=True)
     scheduled_at = Column(DateTime, nullable=False, index=True)               # UTC
+    planned_at = Column(DateTime, nullable=True)        # الموعد الذي وُزّعت عليه عند التوليد («الموعد الأصلي»)
+    cancelled_at = Column(DateTime, nullable=True)
     approved_at = Column(DateTime, nullable=True)
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     video_job_id = Column(Integer, ForeignKey("factory_video_jobs.id"), nullable=True)
