@@ -450,6 +450,7 @@ class CustomerWorkspaceResponse(BaseModel):
     max_images: int
     max_image_bytes: int
     image_extensions: List[str]
+    image_types: List[str]   # أنواع المحتوى المقبولة (لمنتقي الصور في الهاتف مع الامتدادات)
 
 
 class CustomerPageLook(BaseModel):
