@@ -397,7 +397,7 @@ def _post_view(post: models.Post, media_ids: dict, page_id: str) -> dict:
         "status": status,
         "error": _friendly_error(raw_error) if failed else None,
         "error_detail": (raw_error or None) and raw_error[:300],
-        "published_at": post.published_at,
+        "published_at": post.published_at.replace(tzinfo=timezone.utc) if post.published_at else None,
         "scheduled_at": post.scheduled_at.replace(tzinfo=timezone.utc) if post.scheduled_at else None,
         "facebook_url": f"https://www.facebook.com/{page_id}/videos/{remote_id}" if remote_id else None,
     }

@@ -99,7 +99,7 @@ class CustomerPublishTests(WorkspaceTestBase):
         self.assertEqual(len(posts), 1)
         self.assertEqual((posts[0]["status"], posts[0]["media_id"], posts[0]["error"]), ("published", media_id, None))
         self.assertEqual(posts[0]["facebook_url"], "https://www.facebook.com/111/videos/111_1")
-        self.assertIsNotNone(posts[0]["published_at"])
+        self.assertTrue(posts[0]["published_at"].endswith(("Z", "+00:00")))     # UTC صريح ليعرضه المتصفح بتوقيت الجزائر
         self.assertNotIn("factory_id", posts[0])
         with self.Session() as db:
             post = db.query(models.Post).one()
