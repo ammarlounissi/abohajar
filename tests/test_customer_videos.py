@@ -48,7 +48,8 @@ class CustomerVideoTests(WorkspaceTestBase):
 
     def test_requires_login_and_a_linked_page(self):
         for method, path in (("get", "/videos/options"), ("post", "/videos"), ("get", "/videos/jobs"),
-                             ("get", "/videos/jobs/1"), ("get", "/videos/audio/a.mp3")):
+                             ("get", "/videos/jobs/1"), ("get", "/videos/audio/a.mp3"),
+                             ("get", "/videos/library")):
             with self.subTest(path=path):
                 kwargs = {"json": {}} if method == "post" else {}
                 self.assertEqual(getattr(self.client(), method)(f"{BASE}{path}", **kwargs).status_code, 401)
@@ -100,6 +101,15 @@ class CustomerVideoTests(WorkspaceTestBase):
         self.assertEqual((served.status_code, served.headers["content-type"]), (200, "video/mp4"))
 
         self.assertEqual([j["id"] for j in client.get(f"{BASE}/videos/jobs").json()], [job["id"]])
+        # رقم الفيديو الناتج في المكتبة، لينشره الزبون مباشرة من صفحة التوليد
+        self.assertIsNone(job["media_id"])
+        self.assertEqual(done["media_id"], videos[0]["id"])
+        library = client.get(f"{BASE}/videos/library").json()
+        self.assertEqual(
+            [(v["id"], v["status"], v["template"], v["duration"]) for v in library["videos"]],
+            [(videos[0]["id"], "ready", video_maker.get_video_template("quick_7").name, 7)],
+        )
+        self.assertIsNotNone(library["videos"][0]["created_at"])
         with self.Session() as db:
             row = db.get(models.FactoryVideoJob, job["id"])
             self.assertEqual((row.factory_id, row.source, row.sku), (factory_id, "library", None))
@@ -153,7 +163,10 @@ class CustomerVideoTests(WorkspaceTestBase):
         res = client.post(f"{BASE}/videos", json={})
         self.assertEqual(res.status_code, 422)
         self.assertIn("قيد التوليد", res.json()["detail"])
+        generating = client.get(f"{BASE}/videos/library").json()["generating"]
+        self.assertEqual(generating["status"], "queued")                 # المكتبة تعرض التوليد الجاري
         self.run_worker_once()
+        self.assertIsNone(client.get(f"{BASE}/videos/library").json()["generating"])
         self.assertEqual(client.post(f"{BASE}/videos", json={}).status_code, 202)
 
     def test_video_quota(self):

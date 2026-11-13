@@ -93,6 +93,12 @@ def get_audio(service_key: str, name: str, user=Depends(get_current_user), db: S
     return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
+@router.get("/videos/library", response_model=schemas.CustomerVideoLibrary)
+def get_video_library(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """فيديوهات المكتبة بحالة كل منها (جاهز، مجدول، قيد النشر، منشور، تعذّر، لم يتأكد) وعدد كل حالة."""
+    return customer_workspaces.video_library(db, user.id, service_key)
+
+
 @router.get("/videos/jobs", response_model=List[schemas.CustomerVideoJob])
 def list_video_jobs(
     service_key: str, limit: int = Query(10, ge=1, le=50),

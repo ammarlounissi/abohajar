@@ -189,6 +189,85 @@ class CustomerPublishTests(WorkspaceTestBase):
             db.commit()
         self.assertEqual(client.get(f"{BASE}/videos/posts").json()[0]["status"], "unknown")
 
+    # ───── مكتبة الفيديو بحالاتها (GET /videos/library) ─────
+
+    def library(self, client):
+        res = client.get(f"{BASE}/videos/library")
+        self.assertEqual(res.status_code, 200, res.text)
+        return res.json()
+
+    def test_library_requires_login_and_a_linked_page(self):
+        self.assertEqual(self.client().get(f"{BASE}/videos/library").status_code, 401)
+        self.assertEqual(self.client(1).get(f"{BASE}/videos/library").status_code, 409)
+
+    def test_library_lists_each_video_with_its_state_and_counts(self):
+        self.link(1, page_id="111")
+        client = self.client(1)
+        ready = self.add_video(name="ready.mp4")
+        published = self.add_video(name="published.mp4")
+        failed = self.add_video(name="failed.mp4")
+        self.publish(client, published, "منشور")
+        self.publisher.fail = PublishError(ReportKind.NETWORK, "timeout")
+        self.publish(client, failed, "فاشل")
+        self.run_background = False
+        self.publisher.fail = None
+        publishing = self.add_video(name="publishing.mp4")
+        self.publish(client, publishing)
+        stuck = self.add_video(name="stuck.mp4")
+        self.publish(client, stuck)
+        with self.Session() as db:
+            post = db.query(models.Post).filter(models.Post.media_urls.contains("stuck.mp4")).one()
+            post.claimed_at = utc_now() - timedelta(minutes=settings.PUBLISH_STALE_MINUTES + 1)
+            # منشور مجدول (النشر الجماعي) لفيديو في المكتبة ينتظر موعده
+            scheduled_url = db.get(models.Media, ready).url.replace("ready.mp4", "scheduled.mp4")
+            row = db.query(models.CustomerWorkspace).filter_by(user_id=1).first()
+            db.add(models.Media(factory_id=row.factory_id, media_type="video", url=scheduled_url))
+            db.add(models.Post(
+                factory_id=row.factory_id, media_type="reel", media_urls=[scheduled_url], description="غداً",
+                status=PostStatus.APPROVED, scheduled_at=utc_now() + timedelta(days=1),
+            ))
+            db.commit()
+
+        body = self.library(client)
+        states = {video["url"].rsplit("/", 1)[-1]: video["status"] for video in body["videos"]}
+        self.assertEqual(states, {
+            "scheduled.mp4": "scheduled", "stuck.mp4": "unknown", "publishing.mp4": "publishing",
+            "failed.mp4": "failed", "published.mp4": "published", "ready.mp4": "ready",
+        })
+        self.assertEqual(list(states)[0], "scheduled.mp4")                 # الأحدث أولاً
+        self.assertEqual(body["counts"], {
+            "all": 6, "ready": 1, "scheduled": 1, "publishing": 1, "published": 1, "failed": 1, "unknown": 1,
+        })
+        self.assertEqual(body["max_videos"], 20)
+        self.assertIsNone(body["generating"])
+        by_id = {video["id"]: video for video in body["videos"]}
+        self.assertIsNone(by_id[ready]["post"])
+        self.assertEqual(by_id[published]["post"]["facebook_url"], "https://www.facebook.com/111/videos/111_1")
+        self.assertEqual(by_id[failed]["post"]["caption"], "فاشل")
+        self.assertIsNotNone(by_id[failed]["post"]["error"])
+        self.assertIsNone(by_id[ready]["template"])                          # بلا مهمة توليد معروفة
+        self.assertNotIn("factory_id", body["videos"][0])
+
+    def test_library_follows_a_retry_to_its_new_state(self):
+        self.link(1)
+        client = self.client(1)
+        media_id = self.add_video()
+        self.publisher.fail = PublishError(ReportKind.NETWORK, "timeout")
+        self.publish(client, media_id)
+        self.assertEqual(self.library(client)["videos"][0]["status"], "failed")
+        self.publisher.fail = None
+        self.publish(client, media_id)
+        body = self.library(client)
+        self.assertEqual(body["videos"][0]["status"], "published")
+        self.assertEqual((body["counts"]["failed"], body["counts"]["published"]), (0, 1))
+
+    def test_library_is_scoped_to_the_users_page(self):
+        self.link(1, page_id="111")
+        self.link(2, page_id="222")
+        self.add_video(user_id=1)
+        self.assertEqual(self.library(self.client(2))["counts"]["all"], 0)
+        self.assertEqual(self.library(self.client(1))["counts"]["all"], 1)
+
     # ───── الرفض ─────
 
     def test_rejects_what_cannot_be_published(self):

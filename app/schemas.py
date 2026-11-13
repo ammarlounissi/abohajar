@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -649,6 +649,30 @@ class CustomerVideoJob(BaseModel):
     error: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
+    media_id: Optional[int] = None      # الفيديو الناتج في المكتبة (بعد النجاح، وما لم يُحذف)
+
+
+CustomerVideoState = Literal["ready", "scheduled", "publishing", "published", "failed", "unknown"]
+
+
+class CustomerVideoItem(BaseModel):
+    """فيديو في مكتبة الصفحة مع حالته. ready: لم يُنشر ولم يُجدول بعد؛ والباقي حالة آخر منشور له (post).
+    template وduration وcreated_at من مهمة التوليد التي صنعته (فارغة لفيديو بلا مهمة معروفة)."""
+    id: int
+    url: str
+    status: CustomerVideoState
+    template: Optional[str] = None      # اسم القالب للعرض
+    duration: Optional[float] = None
+    created_at: Optional[datetime] = None
+    post: Optional[CustomerVideoPost] = None
+
+
+class CustomerVideoLibrary(BaseModel):
+    """مكتبة فيديوهات الصفحة، الأحدث أولاً. counts: عدد كل حالة ومعها all. generating: التوليد الجاري إن وُجد."""
+    videos: List[CustomerVideoItem]
+    counts: Dict[str, int]
+    generating: Optional[CustomerVideoJob] = None
+    max_videos: int
 
 
 # --- النشر الجماعي المجدول: مسودات تُراجع ويُوافق عليها قبل الرندرة والنشر ---

@@ -48,7 +48,7 @@ TEST_MESSAGE_TITLE = "الإشعارات تعمل"
 class Message:
     title: str
     body: str
-    page: str = ""          # القسم في لوحة الخدمة: "" للرئيسية، "schedule" للمجدول، "videos" للنشر اليدوي
+    page: str = ""          # القسم في لوحة الخدمة: "" للرئيسية، "schedule" للمجدول، "publish" للنشر اليدوي
     tag: str = ""           # إشعار بالوسم نفسه يحل محل السابق على الجهاز بدل أن يتراكم
     ttl: int = 24 * 3600    # كم تحتفظ به خدمة الدفع إن كان الجهاز مطفأً
 
@@ -294,8 +294,8 @@ def _excerpt(text: Optional[str], limit: int = 90) -> str:
 
 
 def _post_section(scheduled: bool) -> str:
-    """قسم اللوحة الذي يُفتح من إشعار منشور: المجدول، أو «توليد الفيديو» حيث يُنشر الفيديو يدوياً."""
-    return "schedule" if scheduled else "videos"
+    """قسم اللوحة الذي يُفتح من إشعار منشور: المجدول، أو «نشر الفيديو» حيث يُنشر الفيديو يدوياً ويُتابَع."""
+    return "schedule" if scheduled else "publish"
 
 
 def post_published(post_id: int, caption: Optional[str], scheduled: bool) -> Message:

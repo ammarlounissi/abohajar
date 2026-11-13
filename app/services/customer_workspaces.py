@@ -301,22 +301,35 @@ def audio_file(db: Session, user_id: int, service_key: str, name: str) -> Path:
     return video_maker.resolve_audio(name)
 
 
-def list_video_jobs(db: Session, user_id: int, service_key: str, *, limit: int = 10) -> List[models.FactoryVideoJob]:
+def _job_view(job: models.FactoryVideoJob, media_ids: dict) -> dict:
+    """المهمة كما يراها الزبون، ومعها رقم الفيديو الناتج في المكتبة (لينشره مباشرة بعد التوليد)."""
+    return {
+        "id": job.id, "status": job.status, "template": job.template, "duration": job.duration,
+        "audio": job.audio, "video_url": job.video_url, "images_used": job.images_used, "error": job.error,
+        "created_at": job.created_at, "completed_at": job.completed_at,
+        "media_id": media_ids.get(job.video_url) if job.video_url else None,
+    }
+
+
+def list_video_jobs(db: Session, user_id: int, service_key: str, *, limit: int = 10) -> List[dict]:
     """آخر مهام التوليد لصفحة الزبون، الأحدث أولاً."""
     workspace = current_workspace(db, user_id, service_key)
-    return (
+    jobs = (
         db.query(models.FactoryVideoJob)
         .filter(models.FactoryVideoJob.factory_id == workspace.factory_id)
         .order_by(models.FactoryVideoJob.id.desc())
         .limit(limit)
         .all()
     )
+    media_ids = _media_ids(db, workspace.factory_id)
+    return [_job_view(job, media_ids) for job in jobs]
 
 
-def get_video_job(db: Session, user_id: int, service_key: str, job_id: int) -> models.FactoryVideoJob:
+def get_video_job(db: Session, user_id: int, service_key: str, job_id: int) -> dict:
     """مهمة من مهام صفحة الزبون فقط (NotFoundError لغيرها)."""
     workspace = current_workspace(db, user_id, service_key)
-    return factory_video_jobs.get_video_job(db, workspace.factory_id, job_id)
+    job = factory_video_jobs.get_video_job(db, workspace.factory_id, job_id)
+    return _job_view(job, _media_ids(db, workspace.factory_id))
 
 
 # ───── نشر الفيديو على الصفحة المربوطة (الناشر وpost_deliveries كما هما) ─────
@@ -409,6 +422,69 @@ def list_video_posts(db: Session, user_id: int, service_key: str) -> List[dict]:
         seen.add(url)
         views.append(_post_view(post, media_ids, workspace.page_id))
     return views
+
+
+VIDEO_STATES = ("ready", "scheduled", "publishing", "published", "failed", "unknown")
+
+
+def video_library(db: Session, user_id: int, service_key: str) -> dict:
+    """فيديوهات مكتبة الصفحة، الأحدث أولاً، كل منها بحالته (ready أو حالة آخر منشور له) وبما صنعه من قالب،
+    مع عدد كل حالة والتوليد الجاري. هي المرجع لصفحة «مكتبة الفيديو» وفلاترها، ولقائمة ما يُنشر."""
+    workspace = current_workspace(db, user_id, service_key)
+    factory_id = workspace.factory_id
+    videos = (
+        db.query(models.Media)
+        .filter(models.Media.factory_id == factory_id, models.Media.media_type == "video")
+        .order_by(models.Media.id.desc())
+        .limit(MAX_VIDEOS * 5)          # فوق السقف احتياطاً لفيديوهات الإدارة القديمة
+        .all()
+    )
+    media_ids = {video.url: video.id for video in videos}
+    latest: dict = {}
+    for post in _reel_posts(db, factory_id):
+        url = _post_url(post)
+        if url in media_ids and url not in latest and post.status in _SHOWN:
+            latest[url] = _post_view(post, media_ids, workspace.page_id)
+    jobs = {
+        job.video_url: job
+        for job in db.query(models.FactoryVideoJob).filter(
+            models.FactoryVideoJob.factory_id == factory_id,
+            models.FactoryVideoJob.video_url.in_(list(media_ids)),
+        )
+    } if media_ids else {}
+    names: dict = {}
+
+    def template_name(template_id: str) -> str:
+        if template_id not in names:
+            try:
+                names[template_id] = video_maker.get_video_template(template_id).name
+            except Exception:       # قالب حُذف من القائمة بعد التوليد
+                names[template_id] = template_id
+        return names[template_id]
+
+    items = []
+    for video in videos:
+        post, job = latest.get(video.url), jobs.get(video.url)
+        items.append({
+            "id": video.id,
+            "url": video.url,
+            "status": post["status"] if post else "ready",
+            "template": template_name(job.template) if job else None,
+            "duration": job.duration if job else None,
+            "created_at": (job.completed_at or job.created_at).replace(tzinfo=timezone.utc) if job else None,
+            "post": post,
+        })
+    counts = {state: 0 for state in VIDEO_STATES}
+    for item in items:
+        counts[item["status"]] += 1
+    counts["all"] = len(items)
+    active = _active_job(db, factory_id)
+    return {
+        "videos": items,
+        "counts": counts,
+        "generating": _job_view(active, media_ids) if active else None,
+        "max_videos": MAX_VIDEOS,
+    }
 
 
 def publish_video(

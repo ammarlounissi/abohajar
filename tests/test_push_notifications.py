@@ -231,4 +231,4 @@ class PushDeliveryTests(PushTestBase):
         payload = self.sent[-1][1]
         self.assertEqual(payload["title"], "نُشر منشورك على صفحتك")
         self.assertEqual(payload["body"], "خبز الدار ساخن كل صباح")
-        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/videos/")
+        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/publish/")
