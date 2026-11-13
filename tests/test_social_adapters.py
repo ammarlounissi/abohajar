@@ -214,6 +214,72 @@ class FacebookFlowTests(ConfiguredCase):
         self.assertEqual(result.kind, ReportKind.TOKEN)
         self.assertIn("(#190)", result.error)
 
+    # ───── غلاف الريل: media_urls[1] ─────
+
+    REEL = ("https://api.ikhlasdz.com/v.mp4", "https://api.ikhlasdz.com/cover.png")
+
+    @staticmethod
+    def png(size=(1080, 1920)):
+        out = io.BytesIO()
+        Image.new("RGB", size, "red").save(out, format="PNG")
+        return out.getvalue()
+
+    def reel_flow(self, cover_response, video_responses):
+        """ينشر ريلاً بغلاف، ويعيد طلبات /videos كما وصلت (هل فيها thumb، وجسمها)."""
+        videos, answers = [], list(video_responses)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("cover.png"):
+                return cover_response
+            if request.method == "GET":
+                return httpx.Response(200, json={"access_token": "PAGETOKEN", "id": "PAGE1"})
+            body = request.read()
+            videos.append({"thumb": b'name="thumb"' in body, "body": body, "type": request.headers["content-type"]})
+            return answers.pop(0)
+
+        result = run(FacebookPublisher(transport=httpx.MockTransport(handler)).publish(post("reel", self.REEL)))
+        return result, videos
+
+    def test_reel_uploads_first_image_as_jpeg_cover(self):
+        result, videos = self.reel_flow(httpx.Response(200, content=self.png()), [httpx.Response(200, json={"id": "V1"})])
+        self.assertTrue(result.ok)
+        self.assertEqual(len(videos), 1)
+        self.assertTrue(videos[0]["thumb"])
+        self.assertTrue(videos[0]["type"].startswith("multipart/form-data"))
+        self.assertIn(b"image/jpeg", videos[0]["body"])
+        self.assertIn(b"https://api.ikhlasdz.com/v.mp4", videos[0]["body"])     # file_url مع الغلاف
+
+    def test_reel_without_cover_when_cover_cannot_be_read(self):
+        for broken in (httpx.Response(404), httpx.Response(200, content=b"not an image")):
+            result, videos = self.reel_flow(broken, [httpx.Response(200, json={"id": "V1"})])
+            self.assertTrue(result.ok)
+            self.assertEqual([v["thumb"] for v in videos], [False])
+
+    def test_reel_retries_without_cover_when_facebook_rejects_it(self):
+        rejected = httpx.Response(400, json={"error": {"message": "Invalid thumbnail", "code": 100}})
+        result, videos = self.reel_flow(httpx.Response(200, content=self.png()), [rejected, httpx.Response(200, json={"id": "V1"})])
+        self.assertTrue(result.ok)
+        self.assertEqual([v["thumb"] for v in videos], [True, False])
+
+    def test_reel_token_error_is_not_retried_without_cover(self):
+        expired = httpx.Response(400, json={"error": {"message": "expired", "code": 190}})
+        result, videos = self.reel_flow(httpx.Response(200, content=self.png()), [expired] * 4)
+        self.assertFalse(result.ok)
+        self.assertTrue(all(v["thumb"] for v in videos))          # لا طلب بلا غلاف بسبب خطأ الرمز
+
+    def test_reel_without_second_url_has_no_cover(self):
+        bodies = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                bodies.append(request.read())
+            return httpx.Response(200, json={"access_token": "T", "id": "V2"})
+
+        result = run(FacebookPublisher(transport=httpx.MockTransport(handler)).publish(post("reel", self.REEL[:1])))
+        self.assertTrue(result.ok)
+        self.assertEqual(len(bodies), 1)
+        self.assertNotIn(b"thumb", bodies[0])
+
 
 class InstagramFlowTests(ConfiguredCase):
     @staticmethod

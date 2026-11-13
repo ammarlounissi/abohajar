@@ -1,10 +1,10 @@
-"""مساحة الزبون لخدمة: مكتبة وسائط صفحته المربوطة وتوليد الفيديو منها. تتطلب جلسة مستخدم (لا مفتاح إدارة).
+"""مساحة الزبون لخدمة: مكتبة وسائط صفحته المربوطة ومنشوراتها (من الجدولة إلى النشر). تتطلب جلسة مستخدم (لا مفتاح إدارة).
 
 المصنع يُستخرج من الجلسة والصفحة المربوطة بالخدمة، ولا يظهر رقمه في أي مسار هنا.
 401 بلا جلسة · 404 خدمة مجهولة أو عنصر ليس لصفحته · 409 لم يربط صفحة بالخدمة · 422 طلب أو ملف مرفوض."""
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,7 @@ from app import schemas
 from app.core.database import get_db
 from app.routers.auth import get_current_user
 from app.services import (
-    customer_captions, customer_overview, customer_workspaces, post_drafts, post_publisher, push_notifications,
+    customer_captions, customer_overview, customer_workspaces, post_drafts, push_notifications,
 )
 
 router = APIRouter(prefix="/api/services/{service_key}", tags=["customer-workspace"])
@@ -68,22 +68,11 @@ def delete_media(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# --- توليد الفيديو من صور المكتبة ---
+# --- خيارات الفيديو (القوالب والأصوات للمعاينة) والأرشيف ---
 
 @router.get("/videos/options", response_model=schemas.CustomerVideoOptions)
 def get_video_options(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
     return customer_workspaces.video_options(db, user.id, service_key)
-
-
-@router.post("/videos", response_model=schemas.CustomerVideoJob, status_code=status.HTTP_202_ACCEPTED)
-def request_video(
-    service_key: str, body: schemas.CustomerVideoRequest,
-    user=Depends(get_current_user), db: Session = Depends(get_db),
-):
-    """يضع توليد الفيديو في الطابور ويعيد المهمة فوراً؛ تُتابَع حالتها من /videos/jobs/{id}."""
-    return customer_workspaces.request_video(
-        db, user.id, service_key, template=body.template, audio=body.audio, image_ids=body.image_ids,
-    )
 
 
 @router.get("/videos/audio/{name}", response_class=FileResponse)
@@ -93,42 +82,11 @@ def get_audio(service_key: str, name: str, user=Depends(get_current_user), db: S
     return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
-@router.get("/videos/jobs", response_model=List[schemas.CustomerVideoJob])
-def list_video_jobs(
-    service_key: str, limit: int = Query(10, ge=1, le=50),
-    user=Depends(get_current_user), db: Session = Depends(get_db),
-):
-    return customer_workspaces.list_video_jobs(db, user.id, service_key, limit=limit)
-
-
-@router.get("/videos/jobs/{job_id}", response_model=schemas.CustomerVideoJob)
-def get_video_job(
-    service_key: str, job_id: int, user=Depends(get_current_user), db: Session = Depends(get_db),
-):
-    return customer_workspaces.get_video_job(db, user.id, service_key, job_id)
-
-
-# --- نشر الفيديو على الصفحة المربوطة ---
-
-@router.get("/videos/posts", response_model=List[schemas.CustomerVideoPost])
-def list_video_posts(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
-    """حالة نشر كل فيديو (آخر منشور له)."""
-    return customer_workspaces.list_video_posts(db, user.id, service_key)
-
-
-@router.post(
-    "/videos/{media_id}/publish", response_model=schemas.CustomerVideoPost,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def publish_video(
-    service_key: str, media_id: int, body: schemas.CustomerPublishRequest, background: BackgroundTasks,
-    user=Depends(get_current_user), db: Session = Depends(get_db),
-):
-    """نشر فوري على الصفحة المربوطة: يرجع 202 بحالة publishing والنشر يجري بعد الرد؛
-    تُتابَع النتيجة من /videos/posts. الفاشل تُعاد محاولته بالطلب نفسه."""
-    view = customer_workspaces.publish_video(db, user.id, service_key, media_id, caption=body.caption)
-    background.add_task(post_publisher.publish_claimed_in_background, view["id"])
-    return view
+@router.get("/videos/archive", response_model=List[schemas.CustomerVideoItem])
+def get_video_archive(service_key: str, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """الفيديوهات القديمة التي لا تتبع منشوراً، بحالة نشرها اليدوي السابق. للعرض والحذف (DELETE /media/{id}) فقط:
+    التوليد والنشر صارا عبر المنشورات (/drafts) وحدها، بمراحلها: جدولة، تعديل، موافقة، توليد، نشر."""
+    return customer_workspaces.video_archive(db, user.id, service_key)
 
 
 # --- إعدادات الصفحة ونص المنشور بـ Gemini ---
@@ -179,6 +137,16 @@ def generate_drafts(
     return post_drafts.generate(db, user.id, service_key, count=body.count, at=body.time)
 
 
+@router.post("/drafts/one", response_model=schemas.CustomerDraft, status_code=status.HTTP_201_CREATED)
+def create_draft(
+    service_key: str, body: schemas.CustomerDraftCreate,
+    user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """منشور واحد (المرحلة الأولى: الجدولة) بموعده أو بأقرب موعد مسموح، ثم يُعدَّل ويُوافق عليه كأي مسودة.
+    422 بلا نشاط أو بلا صور أو فوق الحد أو بموعد يخالف قيود الجدولة."""
+    return post_drafts.create_one(db, user.id, service_key, scheduled_at=body.scheduled_at)
+
+
 @router.post("/drafts/approve", response_model=schemas.CustomerDrafts)
 def approve_drafts(
     service_key: str, body: schemas.CustomerDraftsApproval,
@@ -193,7 +161,7 @@ def update_draft(
     service_key: str, draft_id: int, body: schemas.CustomerDraftUpdate,
     user=Depends(get_current_user), db: Session = Depends(get_db),
 ):
-    """تعديل النص (قبل الموافقة) أو الموعد (قبل النشر، بقيود الجدولة)."""
+    """تعديل المحتوى (النص، القالب، الصوت، الصور) أو الموعد. تعديل المحتوى بعد الموافقة يعيده للمراجعة."""
     return post_drafts.update_draft(db, user.id, service_key, draft_id, body.model_dump(exclude_unset=True))
 
 

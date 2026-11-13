@@ -1,4 +1,7 @@
-"""توليد الفيديو للزبون من صور مكتبة صفحته: الطابور والمحرك الموجودان، بمسارات تعرف الصفحة من الجلسة."""
+"""فيديو الزبون من صور مكتبة صفحته: خيارات المعاينة، وطابور التوليد والمحرك اللذان تمر بهما منشوراته بعد الموافقة.
+
+لا توليد يدوي للزبون: كل فيديو منشور يمر بالجدولة ثم التعديل ثم الموافقة ثم التوليد ثم النشر (tests/test_post_drafts.py).
+هنا الطابور نفسه كما تطلبه مسودة معتمدة (enqueue)."""
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -44,15 +47,43 @@ class CustomerVideoTests(WorkspaceTestBase):
         self.assertEqual(self.upload(client).status_code, 201)
         return client
 
+    def enqueue(self, user_id=1, template="quick_7", audio="a.mp3", image_ids=None, engine="ffmpeg", page_id="111"):
+        """ما تطلبه مسودة معتمدة من طابور الفيديو (post_drafts.advance_renders)."""
+        with self.Session() as db:
+            job = factory_video_jobs.enqueue_video_job(
+                db, self.factory_of(user_id, page_id), source="library", sku=None, template=template, duration=None,
+                audio=audio, image_ids=image_ids, engine=engine,
+            )
+            return job.id
+
+    def job(self, job_id):
+        with self.Session() as db:
+            row = db.get(models.FactoryVideoJob, job_id)
+            db.expunge(row)
+            return row
+
+    def images_of(self, client):
+        """صور المكتبة: (المعرّف، اسم الملف) الأحدث أولاً."""
+        return [(item["id"], item["url"].rsplit("/", 1)[-1]) for item in client.get(f"{BASE}/media?media_type=image").json()]
+
     # ───── الوصول ─────
 
     def test_requires_login_and_a_linked_page(self):
-        for method, path in (("get", "/videos/options"), ("post", "/videos"), ("get", "/videos/jobs"),
-                             ("get", "/videos/jobs/1"), ("get", "/videos/audio/a.mp3")):
+        for path in ("/videos/options", "/videos/audio/a.mp3", "/videos/archive"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client().get(f"{BASE}{path}").status_code, 401)
+                self.assertEqual(self.client(1).get(f"{BASE}{path}").status_code, 409)
+
+    def test_no_manual_generation_or_instant_publishing(self):
+        """التوليد والنشر يمران بالمنشورات وحدها (جدولة، تعديل، موافقة، توليد، نشر) فتُطبَّق قيود النشر."""
+        client = self.ready_client()
+        for method, path in (("post", "/videos"), ("get", "/videos/jobs"), ("get", "/videos/jobs/1"),
+                             ("post", "/videos/1/publish"), ("get", "/videos/posts"), ("get", "/videos/library")):
             with self.subTest(path=path):
                 kwargs = {"json": {}} if method == "post" else {}
-                self.assertEqual(getattr(self.client(), method)(f"{BASE}{path}", **kwargs).status_code, 401)
-                self.assertEqual(getattr(self.client(1), method)(f"{BASE}{path}", **kwargs).status_code, 409)
+                self.assertIn(getattr(client, method)(f"{BASE}{path}", **kwargs).status_code, (404, 405))
+        with self.Session() as db:
+            self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
 
     # ───── الخيارات ─────
 
@@ -74,149 +105,6 @@ class CustomerVideoTests(WorkspaceTestBase):
         self.assertNotIn("factory_id", body)
         self.assertNotIn("products", body)
 
-    # ───── الطلب والتوليد ─────
-
-    def test_request_is_queued_then_generated_into_the_page_library(self):
-        client = self.ready_client()
-        res = client.post(f"{BASE}/videos", json={"template": "quick_7", "audio": "z.wav"})
-        self.assertEqual(res.status_code, 202, res.text)
-        job = res.json()
-        self.assertEqual((job["status"], job["template"], job["duration"], job["audio"]), ("queued", "quick_7", 7, "z.wav"))
-        self.assertIsNone(job["video_url"])
-        self.assertNotIn("factory_id", job)
-
-        self.assertEqual(self.run_worker_once(), job["id"])
-        done = client.get(f"{BASE}/videos/jobs/{job['id']}").json()
-        self.assertEqual((done["status"], done["images_used"], done["error"]), ("succeeded", 1, None))
-
-        factory_id = self.factory_of(1)
-        self.assertTrue(done["video_url"].startswith(f"http://testserver/api/media/factories/{factory_id}/"))
-        saved = media_library.factory_media_file_path(factory_id, done["video_url"].rsplit("/", 1)[-1])
-        self.assertTrue(saved.is_file())
-        videos = client.get(f"{BASE}/media?media_type=video").json()
-        self.assertEqual([video["url"] for video in videos], [done["video_url"]])
-        self.assertEqual(client.get(f"{BASE}/workspace").json()["videos_count"], 1)
-        served = client.get(done["video_url"].removeprefix("http://testserver"))
-        self.assertEqual((served.status_code, served.headers["content-type"]), (200, "video/mp4"))
-
-        self.assertEqual([j["id"] for j in client.get(f"{BASE}/videos/jobs").json()], [job["id"]])
-        with self.Session() as db:
-            row = db.get(models.FactoryVideoJob, job["id"])
-            self.assertEqual((row.factory_id, row.source, row.sku), (factory_id, "library", None))
-
-    def test_defaults_use_the_default_template_and_a_random_available_audio(self):
-        client = self.ready_client()
-        job = client.post(f"{BASE}/videos", json={}).json()
-        self.assertEqual(job["template"], client.get(f"{BASE}/videos/options").json()["default_template"])
-        self.assertIn(job["audio"], ["a.mp3", "z.wav"])
-
-    def test_generated_video_can_be_deleted_from_the_library(self):
-        client = self.ready_client()
-        client.post(f"{BASE}/videos", json={})
-        self.run_worker_once()
-        video = client.get(f"{BASE}/media?media_type=video").json()[0]
-        saved = media_library.factory_media_file_path(self.factory_of(1), video["url"].rsplit("/", 1)[-1])
-        self.assertEqual(client.delete(f"{BASE}/media/{video['id']}").status_code, 204)
-        self.assertFalse(saved.exists())
-        self.assertEqual(client.get(f"{BASE}/videos/options").json()["videos_count"], 0)
-
-    def test_failed_generation_is_reported_on_the_job(self):
-        client = self.ready_client()
-        job = client.post(f"{BASE}/videos", json={}).json()
-        with mock.patch(
-            "app.services.factory_video_jobs.factory_videos.generate_factory_video",
-            side_effect=errors.InvalidInputError("تعذّر بناء الفيديو"),
-        ):
-            self.run_worker_once()
-        failed = client.get(f"{BASE}/videos/jobs/{job['id']}").json()
-        self.assertEqual((failed["status"], failed["error"], failed["video_url"]), ("failed", "تعذّر بناء الفيديو", None))
-        self.assertEqual(client.post(f"{BASE}/videos", json={}).status_code, 202)   # الفاشلة لا تحجز الدور
-
-    # ───── الرفض ─────
-
-    def test_rejects_requests_that_cannot_be_generated(self):
-        self.link(1)
-        client = self.client(1)
-        res = client.post(f"{BASE}/videos", json={})
-        self.assertEqual(res.status_code, 422)
-        self.assertIn("ارفع صوراً", res.json()["detail"])
-        self.upload(client)
-        self.assertEqual(client.post(f"{BASE}/videos", json={"template": "nope"}).status_code, 422)
-        self.assertEqual(client.post(f"{BASE}/videos", json={"audio": "missing.mp3"}).status_code, 404)
-        self.assertEqual(client.post(f"{BASE}/videos", json={"audio": "../a.mp3"}).status_code, 422)
-        with self.Session() as db:
-            self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
-
-    def test_one_running_job_per_page(self):
-        client = self.ready_client()
-        self.assertEqual(client.post(f"{BASE}/videos", json={}).status_code, 202)
-        res = client.post(f"{BASE}/videos", json={})
-        self.assertEqual(res.status_code, 422)
-        self.assertIn("قيد التوليد", res.json()["detail"])
-        self.run_worker_once()
-        self.assertEqual(client.post(f"{BASE}/videos", json={}).status_code, 202)
-
-    def test_video_quota(self):
-        client = self.ready_client()
-        with mock.patch.object(customer_workspaces, "MAX_VIDEOS", 1):
-            client.post(f"{BASE}/videos", json={})
-            self.run_worker_once()
-            res = client.post(f"{BASE}/videos", json={})
-            self.assertEqual(res.status_code, 422)
-            self.assertIn("الحد الأقصى", res.json()["detail"])
-
-    # ───── المعاينة: الصور المختارة بترتيبها، والصوت ─────
-
-    def images_of(self, client):
-        """صور المكتبة: (المعرّف، اسم الملف) الأحدث أولاً."""
-        return [(item["id"], item["url"].rsplit("/", 1)[-1]) for item in client.get(f"{BASE}/media?media_type=image").json()]
-
-    def test_chosen_images_are_rendered_in_the_preview_order(self):
-        client = self.ready_client()
-        self.upload(client, "b.png")
-        self.upload(client, "c.png")
-        images = self.images_of(client)
-        chosen = [images[2], images[0]]   # الأقدم ثم الأحدث، وتُترك الوسطى
-        res = client.post(f"{BASE}/videos", json={"template": "quick_7", "image_ids": [i for i, _ in chosen]})
-        self.assertEqual(res.status_code, 202, res.text)
-        self.run_worker_once()
-        self.assertEqual(self.rendered, [[name for _, name in chosen]])
-        done = client.get(f"{BASE}/videos/jobs/{res.json()['id']}").json()
-        self.assertEqual((done["status"], done["images_used"]), ("succeeded", 2))
-
-    def test_images_deleted_after_the_request_are_skipped(self):
-        client = self.ready_client()
-        self.upload(client, "b.png")
-        (first, _), (second, second_name) = self.images_of(client)
-        job = client.post(f"{BASE}/videos", json={"image_ids": [first, second]}).json()
-        client.delete(f"{BASE}/media/{first}")
-        self.run_worker_once()
-        self.assertEqual(self.rendered, [[second_name]])
-
-        client.post(f"{BASE}/videos", json={"image_ids": [second]})
-        client.delete(f"{BASE}/media/{second}")
-        self.upload(client, "new.png")   # المكتبة ليست فارغة، لكن المختارة حُذفت كلها
-        self.run_worker_once()
-        failed = client.get(f"{BASE}/videos/jobs").json()[0]
-        self.assertEqual(failed["status"], "failed")
-        self.assertIn("حُذفت الصور المختارة", failed["error"])
-        self.assertNotEqual(failed["id"], job["id"])
-
-    def test_rejects_image_choices_outside_the_page_library(self):
-        mine = self.ready_client(1, "111")
-        other = self.ready_client(2, "222")
-        mine_id = self.images_of(mine)[0][0]
-        other_id = self.images_of(other)[0][0]
-        res = mine.post(f"{BASE}/videos", json={"image_ids": [mine_id, other_id]})
-        self.assertEqual(res.status_code, 404)
-        self.assertEqual(mine.post(f"{BASE}/videos", json={"image_ids": [mine_id, mine_id]}).status_code, 422)
-        self.assertEqual(mine.post(f"{BASE}/videos", json={"image_ids": []}).status_code, 422)
-        videos = mine.post(f"{BASE}/videos", json={"template": "quick_7", "image_ids": list(range(1, 8))})
-        self.assertEqual(videos.status_code, 422)   # quick_7 يأخذ 6 صور على الأكثر
-        self.assertIn("6", videos.json()["detail"])
-        with self.Session() as db:
-            self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)
-
     def test_audio_is_served_to_the_page_owner_for_preview(self):
         client = self.ready_client()
         res = client.get(f"{BASE}/videos/audio/z.wav")
@@ -226,14 +114,77 @@ class CustomerVideoTests(WorkspaceTestBase):
         self.assertEqual(client.get(f"{BASE}/videos/audio/notes.txt").status_code, 422)
         self.assertEqual(client.get(f"{BASE}/videos/audio/..%2Fa.mp3").status_code, 404)
 
+    # ───── الطابور: ما تطلبه المسودة المعتمدة ─────
+
+    def test_queued_video_is_generated_into_the_page_library(self):
+        client = self.ready_client()
+        job_id = self.enqueue(template="quick_7", audio="z.wav")
+        self.assertEqual(self.run_worker_once(), job_id)
+        done = self.job(job_id)
+        self.assertEqual((done.status, done.images_used, done.error), ("succeeded", 1, None))
+        factory_id = self.factory_of(1)
+        self.assertTrue(done.video_url.startswith(f"http://testserver/api/media/factories/{factory_id}/"))
+        saved = media_library.factory_media_file_path(factory_id, done.video_url.rsplit("/", 1)[-1])
+        self.assertTrue(saved.is_file())
+        videos = client.get(f"{BASE}/media?media_type=video").json()
+        self.assertEqual([video["url"] for video in videos], [done.video_url])
+        served = client.get(done.video_url.removeprefix("http://testserver"))
+        self.assertEqual((served.status_code, served.headers["content-type"]), (200, "video/mp4"))
+
+    def test_chosen_images_are_rendered_in_the_preview_order(self):
+        client = self.ready_client()
+        self.upload(client, "b.png")
+        self.upload(client, "c.png")
+        images = self.images_of(client)
+        chosen = [images[2], images[0]]   # الأقدم ثم الأحدث، وتُترك الوسطى
+        job_id = self.enqueue(image_ids=[i for i, _ in chosen])
+        self.run_worker_once()
+        self.assertEqual(self.rendered, [[name for _, name in chosen]])
+        self.assertEqual((self.job(job_id).status, self.job(job_id).images_used), ("succeeded", 2))
+
+    def test_images_deleted_after_the_request_are_skipped(self):
+        client = self.ready_client()
+        self.upload(client, "b.png")
+        (first, _), (second, second_name) = self.images_of(client)
+        self.enqueue(image_ids=[first, second])
+        client.delete(f"{BASE}/media/{first}")
+        self.run_worker_once()
+        self.assertEqual(self.rendered, [[second_name]])
+
+        failed_id = self.enqueue(image_ids=[second])
+        client.delete(f"{BASE}/media/{second}")
+        self.upload(client, "new.png")   # المكتبة ليست فارغة، لكن المختارة حُذفت كلها
+        self.run_worker_once()
+        failed = self.job(failed_id)
+        self.assertEqual(failed.status, "failed")
+        self.assertIn("حُذفت الصور المختارة", failed.error)
+
+    def test_failed_generation_is_reported_on_the_job(self):
+        self.ready_client()
+        job_id = self.enqueue()
+        with mock.patch(
+            "app.services.factory_video_jobs.factory_videos.generate_factory_video",
+            side_effect=errors.InvalidInputError("تعذّر بناء الفيديو"),
+        ):
+            self.run_worker_once()
+        failed = self.job(job_id)
+        self.assertEqual((failed.status, failed.error, failed.video_url), ("failed", "تعذّر بناء الفيديو", None))
+
+    def test_generated_video_can_be_deleted_from_the_library(self):
+        client = self.ready_client()
+        self.enqueue()
+        self.run_worker_once()
+        video = client.get(f"{BASE}/media?media_type=video").json()[0]
+        saved = media_library.factory_media_file_path(self.factory_of(1), video["url"].rsplit("/", 1)[-1])
+        self.assertEqual(client.delete(f"{BASE}/media/{video['id']}").status_code, 204)
+        self.assertFalse(saved.exists())
+        self.assertEqual(client.get(f"{BASE}/videos/options").json()["videos_count"], 0)
+
     # ───── المحرك ─────
 
-    def test_engine_is_saved_with_the_job_and_remotion_renders_it(self):
-        client = self.ready_client()
-        with mock.patch.object(settings, "CUSTOMER_VIDEO_ENGINE", "remotion"):
-            job = client.post(f"{BASE}/videos", json={"template": "cards_15", "audio": "a.mp3"}).json()
-        with self.Session() as db:
-            self.assertEqual(db.get(models.FactoryVideoJob, job["id"]).engine, "remotion")
+    def test_remotion_engine_renders_the_job(self):
+        self.ready_client()
+        job_id = self.enqueue(template="cards_15", audio="a.mp3", engine="remotion")
 
         def remotion(images, output, *, duration, audio, max_bytes, template, fit="blur"):
             self.assertEqual((duration, template.id, audio.name), (15, "cards_15", "a.mp3"))
@@ -244,25 +195,21 @@ class CustomerVideoTests(WorkspaceTestBase):
             self.run_worker_once()
         render.assert_called_once()
         self.assertEqual(self.rendered, [])   # ffmpeg لم يُستدعَ
-        self.assertEqual(client.get(f"{BASE}/videos/jobs/{job['id']}").json()["status"], "succeeded")
+        self.assertEqual(self.job(job_id).status, "succeeded")
 
-    def test_ffmpeg_engine_setting_keeps_ffmpeg(self):
-        client = self.ready_client()
-        job = client.post(f"{BASE}/videos", json={}).json()
-        with self.Session() as db:
-            self.assertEqual(db.get(models.FactoryVideoJob, job["id"]).engine, "ffmpeg")
+    def test_ffmpeg_engine_keeps_ffmpeg(self):
+        self.ready_client()
+        self.enqueue(engine="ffmpeg")
         self.run_worker_once()
         self.assertEqual(len(self.rendered), 1)
 
     # ───── العزل ─────
 
-    def test_jobs_and_videos_are_scoped_to_the_users_page(self):
+    def test_videos_are_scoped_to_the_users_page(self):
         mine = self.ready_client(1, "111")
         other = self.ready_client(2, "222")
-        job = mine.post(f"{BASE}/videos", json={}).json()
-        self.assertEqual(other.get(f"{BASE}/videos/jobs/{job['id']}").status_code, 404)
-        self.assertEqual(other.get(f"{BASE}/videos/jobs").json(), [])
-        self.assertEqual(other.post(f"{BASE}/videos", json={}).status_code, 202)   # مهمة غيره لا تحجز دوره
+        self.enqueue(user_id=1)
+        self.enqueue(user_id=2, page_id="222")
         self.run_worker_once()
         self.run_worker_once()
         self.assertEqual(len(mine.get(f"{BASE}/media?media_type=video").json()), 1)

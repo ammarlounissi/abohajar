@@ -60,10 +60,10 @@ class CustomerOverviewTests(DraftTestBase):
         self.assertEqual(self.overview(client)["missing_settings"], [])
 
     def test_counts_follow_the_drafts_from_review_to_published(self):
-        client = self.ready_client(images=3)
+        client = self.ready_client(images=4)
         self.generate(client, 3)
         data = self.overview(client)
-        self.assertEqual((data["images"], data["drafts_writing"], data["drafts_to_review"]), (3, 3, 0))
+        self.assertEqual((data["images"], data["drafts_writing"], data["drafts_to_review"]), (4, 3, 0))
 
         self.write_captions()
         drafts = self.drafts(client)

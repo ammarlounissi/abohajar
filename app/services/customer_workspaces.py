@@ -8,7 +8,6 @@
 
 اتفاقية الحفظ: ensure_workspace لا تنفّذ commit (تُستدعى ضمن ربط الصفحة)؛ بقية الدوال تحفظ بنفسها."""
 import io
-import random
 from datetime import timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, List, Optional
@@ -19,11 +18,9 @@ from sqlalchemy.orm import Session
 from app import models
 from app.core.config import settings
 from app.core.time import utc_now
-from app.models import DeliveryStatus, FactoryKind, PostApproval, PostStatus
-from app.services import (
-    facebook_services, factory_video_jobs, factory_videos, media_library, post_publisher, video_maker,
-)
-from app.services.errors import ConflictError, InvalidInputError, NotFoundError
+from app.models import DeliveryStatus, FactoryKind, PostStatus
+from app.services import facebook_services, factory_videos, media_library, video_maker
+from app.services.errors import ConflictError, InvalidInputError
 
 # حدود رفع الزبون. الصورة الواحدة بحد ما يقبله مولّد الفيديو (factory_videos.MAX_LIBRARY_IMAGE_*).
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -216,7 +213,7 @@ def delete_media(db: Session, user_id: int, service_key: str, media_id: int) -> 
     media_library.delete_factory_media(db, workspace.factory_id, media_id)
 
 
-# ───── توليد الفيديو من صور المكتبة (طابور factory_video_jobs، والمحرك CUSTOMER_VIDEO_ENGINE) ─────
+# ───── خيارات الفيديو (يولّده طابور factory_video_jobs لمنشورات post_drafts بعد الموافقة) ─────
 
 def _active_job(db: Session, factory_id: int) -> Optional[models.FactoryVideoJob]:
     return (
@@ -247,79 +244,13 @@ def video_options(db: Session, user_id: int, service_key: str) -> dict:
     }
 
 
-def _check_image_ids(db: Session, factory_id: int, image_ids: List[int], max_images: int) -> None:
-    """الصور المختارة: من صور مكتبة هذه الصفحة، بلا تكرار، وبحد القالب."""
-    if len(set(image_ids)) != len(image_ids):
-        raise InvalidInputError("الصورة الواحدة تُختار مرة واحدة")
-    if len(image_ids) > max_images:
-        raise InvalidInputError(f"هذا القالب يأخذ {max_images} صورة على الأكثر")
-    found = (
-        db.query(models.Media.id)
-        .filter(
-            models.Media.factory_id == factory_id,
-            models.Media.media_type == "image",
-            models.Media.id.in_(image_ids),
-        )
-        .count()
-    )
-    if found != len(image_ids):
-        raise NotFoundError("بعض الصور المختارة غير موجودة في مكتبتك؛ حدّث الصفحة واختر من جديد")
-
-
-def request_video(
-    db: Session, user_id: int, service_key: str, *, template: Optional[str], audio: Optional[str],
-    image_ids: Optional[List[int]] = None,
-) -> models.FactoryVideoJob:
-    """يضع في الطابور فيديو من صور مكتبة الصفحة. مهمة واحدة جارية لكل صفحة، وبسقف لعدد الفيديوهات.
-    بلا صوت محدد يُختار صوت عشوائي من المتاح. image_ids: الصور بترتيب المعاينة (بدونها: اختيار عشوائي).
-    المحرك من CUSTOMER_VIDEO_ENGINE ويُحفظ مع المهمة."""
-    workspace = current_workspace(db, user_id, service_key)
-    factory_id = workspace.factory_id
-    selected_template = video_maker.get_video_template(template or video_maker.DEFAULT_FACTORY_TEMPLATE)
-    if _active_job(db, factory_id) is not None:
-        raise InvalidInputError("يوجد فيديو قيد التوليد لهذه الصفحة. انتظر اكتماله ثم اطلب غيره.")
-    if _count(db, factory_id, "image") == 0:
-        raise InvalidInputError("ارفع صوراً إلى المكتبة أولاً ليُبنى منها الفيديو")
-    if _count(db, factory_id, "video") >= MAX_VIDEOS:
-        raise InvalidInputError(f"بلغت الحد الأقصى لعدد الفيديوهات ({MAX_VIDEOS}). احذف فيديو لتولّد غيره.")
-    if image_ids:
-        _check_image_ids(db, factory_id, image_ids, selected_template.max_images)
-    if audio is None:
-        audio_files = video_maker.list_audio_files()
-        audio = random.choice(audio_files) if audio_files else None
-    engine = "remotion" if settings.CUSTOMER_VIDEO_ENGINE == "remotion" else "ffmpeg"
-    return factory_video_jobs.enqueue_video_job(
-        db, factory_id, source="library", sku=None,
-        template=selected_template.id, duration=None, audio=audio,
-        image_ids=image_ids or None, engine=engine,
-    )
-
-
 def audio_file(db: Session, user_id: int, service_key: str, name: str) -> Path:
     """ملف صوت من المتاح للتوليد، لمعاينة الفيديو في اللوحة. لصاحب صفحة مربوطة فقط."""
     current_workspace(db, user_id, service_key)
     return video_maker.resolve_audio(name)
 
 
-def list_video_jobs(db: Session, user_id: int, service_key: str, *, limit: int = 10) -> List[models.FactoryVideoJob]:
-    """آخر مهام التوليد لصفحة الزبون، الأحدث أولاً."""
-    workspace = current_workspace(db, user_id, service_key)
-    return (
-        db.query(models.FactoryVideoJob)
-        .filter(models.FactoryVideoJob.factory_id == workspace.factory_id)
-        .order_by(models.FactoryVideoJob.id.desc())
-        .limit(limit)
-        .all()
-    )
-
-
-def get_video_job(db: Session, user_id: int, service_key: str, job_id: int) -> models.FactoryVideoJob:
-    """مهمة من مهام صفحة الزبون فقط (NotFoundError لغيرها)."""
-    workspace = current_workspace(db, user_id, service_key)
-    return factory_video_jobs.get_video_job(db, workspace.factory_id, job_id)
-
-
-# ───── نشر الفيديو على الصفحة المربوطة (الناشر وpost_deliveries كما هما) ─────
+# ───── حالة منشورات الفيديو (يقرؤها الأرشيف والرئيسية ومسودات النشر المجدول) ─────
 
 MAX_CAPTION = 2200
 _IN_FLIGHT = (PostStatus.APPROVED, PostStatus.PUBLISHING)
@@ -384,7 +315,7 @@ def _post_view(post: models.Post, media_ids: dict, page_id: str) -> dict:
         "status": status,
         "error": _friendly_error(raw_error) if failed else None,
         "error_detail": (raw_error or None) and raw_error[:300],
-        "published_at": post.published_at,
+        "published_at": post.published_at.replace(tzinfo=timezone.utc) if post.published_at else None,
         "scheduled_at": post.scheduled_at.replace(tzinfo=timezone.utc) if post.scheduled_at else None,
         "facebook_url": f"https://www.facebook.com/{page_id}/videos/{remote_id}" if remote_id else None,
     }
@@ -411,47 +342,61 @@ def list_video_posts(db: Session, user_id: int, service_key: str) -> List[dict]:
     return views
 
 
-def publish_video(
-    db: Session, user_id: int, service_key: str, media_id: int, *, caption: Optional[str],
-) -> dict:
-    """يحجز نشر فيديو من مكتبة الصفحة على الصفحة المربوطة فوراً ويرجع حالته (publishing).
-    المستدعي يشغّل النشر نفسه بعد الرد: post_publisher.publish_claimed_in_background(id).
-    الفيديو يُنشر مرة واحدة؛ النشر الفاشل تُعاد محاولته على المنشور نفسه."""
+def _draft_video_urls(db: Session, factory_id: int) -> set:
+    """روابط الفيديوهات التي وُلّدت لمنشورات (مسودات): تُعرض مع منشوراتها لا في الأرشيف."""
+    rows = (
+        db.query(models.FactoryVideoJob.video_url)
+        .join(models.PostDraft, models.PostDraft.video_job_id == models.FactoryVideoJob.id)
+        .filter(models.PostDraft.factory_id == factory_id, models.FactoryVideoJob.video_url.isnot(None))
+    )
+    return {url for (url,) in rows}
+
+
+def video_archive(db: Session, user_id: int, service_key: str) -> List[dict]:
+    """الفيديوهات القديمة التي لا تتبع منشوراً (من صفحة التوليد اليدوي قبل توحيد المنشورات)، الأحدث أولاً،
+    كل منها بحالة آخر نشر يدوي له (ready = لم يُنشر). للعرض والحذف فقط: النشر صار عبر المنشورات وحدها."""
     workspace = current_workspace(db, user_id, service_key)
     factory_id = workspace.factory_id
-    channel = facebook_services.connected_channel(db, user_id, service_key)
-    video = db.query(models.Media).filter(
-        models.Media.id == media_id, models.Media.factory_id == factory_id,
-        models.Media.media_type == "video",
-    ).first()
-    if video is None:
-        raise NotFoundError("الفيديو غير موجود في مكتبة صفحتك")
-    if not channel.is_active or not channel.page_access_token:
-        raise InvalidInputError("صفحتك تحتاج إعادة ربط قبل النشر عليها. اضغط «تغيير الصفحة» وأعد ربطها.")
-    caption = (caption or "").strip()
-    if len(caption) > MAX_CAPTION:
-        raise InvalidInputError(f"النص أطول من الحد المسموح ({MAX_CAPTION} حرفاً)")
-
-    existing = _latest_post(_reel_posts(db, factory_id), video.url)
-    if existing is not None and existing.status == PostStatus.PUBLISHED:
-        raise InvalidInputError("نُشر هذا الفيديو على صفحتك من قبل")
-    if existing is not None and existing.status in _IN_FLIGHT:
-        raise InvalidInputError("هذا الفيديو قيد النشر الآن")
-    if existing is not None and existing.status == PostStatus.FAILED:
-        existing.description = caption
-        post_publisher.set_channels(db, existing, [channel.id])     # يحفظ (commit)
-        post = post_publisher.claim_post(db, existing.id)
-    else:
-        now = utc_now()
-        # يُنشأ محجوزاً (publishing) مباشرة: لو أُنشئ approved لالتقطه مؤقت النشر الدوري قبل نشرنا الفوري
-        post = models.Post(
-            factory_id=factory_id, media_type="reel", media_urls=[video.url], description=caption,
-            status=PostStatus.PUBLISHING, approval=PostApproval.APPROVED, approved_at=now, claimed_at=now,
+    linked = _draft_video_urls(db, factory_id)
+    videos = [
+        video for video in db.query(models.Media)
+        .filter(models.Media.factory_id == factory_id, models.Media.media_type == "video")
+        .order_by(models.Media.id.desc())
+        if video.url not in linked
+    ]
+    media_ids = {video.url: video.id for video in videos}
+    latest: dict = {}
+    for post in _reel_posts(db, factory_id):
+        url = _post_url(post)
+        if url in media_ids and url not in latest and post.status in _SHOWN:
+            latest[url] = _post_view(post, media_ids, workspace.page_id)
+    jobs = {
+        job.video_url: job
+        for job in db.query(models.FactoryVideoJob).filter(
+            models.FactoryVideoJob.factory_id == factory_id,
+            models.FactoryVideoJob.video_url.in_(list(media_ids)),
         )
-        post.deliveries = [
-            models.PostDelivery(channel_id=channel.id, status=DeliveryStatus.PENDING.value, attempts=0),
-        ]
-        db.add(post)
-        db.commit()
-        db.refresh(post)
-    return _post_view(post, {video.url: video.id}, workspace.page_id)
+    } if media_ids else {}
+    names: dict = {}
+
+    def template_name(template_id: str) -> str:
+        if template_id not in names:
+            try:
+                names[template_id] = video_maker.get_video_template(template_id).name
+            except InvalidInputError:      # قالب حُذف من القائمة بعد التوليد
+                names[template_id] = template_id
+        return names[template_id]
+
+    items = []
+    for video in videos:
+        post, job = latest.get(video.url), jobs.get(video.url)
+        items.append({
+            "id": video.id,
+            "url": video.url,
+            "status": post["status"] if post else "ready",
+            "template": template_name(job.template) if job else None,
+            "duration": job.duration if job else None,
+            "created_at": (job.completed_at or job.created_at).replace(tzinfo=timezone.utc) if job else None,
+            "post": post,
+        })
+    return items

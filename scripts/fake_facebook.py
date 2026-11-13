@@ -83,12 +83,17 @@ async def _fake_graph_get(client, path, **params):
 _fake_ids = itertools.count(1)
 
 
-async def _fake_publish_call(client, method, path, *, token, data=None, params=None):
-    """بديل graph_call داخل محوّل فيسبوك: نشر وهمي بلا أي طلب خارجي."""
+async def _fake_publish_call(client, method, path, *, token, data=None, params=None, files=None):
+    """بديل graph_call داخل محوّل فيسبوك: نشر وهمي بلا أي طلب خارجي. غلاف الريل (thumb) يُحفظ في
+    fake_facebook_last_cover.jpg بجانب قاعدة التقليد ليُرى بعد النشر."""
     from app.models import ReportKind
     from app.services.social.base import PublishError
 
-    print(f"[fake-facebook] نشر مقلَّد: {method} {path} | الرابط: {(data or {}).get('file_url') or (data or {}).get('url')}")
+    thumb = (files or {}).get("thumb")
+    if thumb:
+        (Path(__file__).resolve().parent.parent / "fake_facebook_last_cover.jpg").write_bytes(thumb[1])
+    cover = f" | الغلاف: {len(thumb[1])} بايت" if thumb else " | بلا غلاف"
+    print(f"[fake-facebook] نشر مقلَّد: {method} {path} | الرابط: {(data or {}).get('file_url') or (data or {}).get('url')}{cover}")
     await asyncio.sleep(4)
     error = _scenario().get("publish_error")
     if error:
