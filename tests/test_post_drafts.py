@@ -272,9 +272,13 @@ class PostDraftTests(DraftTestBase):
             self.assertEqual(rows[0].caption_sha256,
                              hashlib.sha256("النسخة التي وافقت عليها".encode()).hexdigest())
             self.assertEqual(rows[0].image_ids, [image["id"] for image in drafts[0]["images"]])
-        # بعد الموافقة لا يتغير النص
+        # تعديل النص بعد الموافقة يعيد المنشور «بانتظار الموافقة»، وسجل الموافقة القديم يبقى كما هو
         res = client.patch(f"{BASE}/drafts/{drafts[0]['id']}", json={"caption": "تعديل"})
-        self.assertEqual(res.status_code, 422)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual((res.json()["status"], res.json()["approved_at"]), ("ready", None))
+        with self.Session() as db:
+            self.assertEqual(db.query(models.PostDraftApproval).count(), 3)
+            self.assertEqual(db.get(models.PostDraftApproval, rows[0].id).caption, "النسخة التي وافقت عليها")
 
     def test_approve_refuses_drafts_still_writing_or_without_text(self):
         client = self.ready_client()
@@ -309,9 +313,9 @@ class PostDraftTests(DraftTestBase):
             self.assertEqual(len(post.deliveries), 1)
             due = [p.id for p in db.query(models.Post).filter(models.Post.scheduled_at <= self.now)]
             self.assertEqual(due, [])                 # الناشر لا ينشره قبل موعده
-        # مكتبة الفيديو تعرضه مجدولاً لا «قيد النشر»
-        posts = client.get(f"{BASE}/videos/posts").json()
-        self.assertEqual(posts[0]["status"], "scheduled")
+        # قائمة المنشورات تعرضه مجدولاً لا «قيد النشر»، وفيديوه معه لا في أرشيف الفيديوهات القديمة
+        self.assertEqual(self.drafts(client)[0]["status"], "scheduled")
+        self.assertEqual(client.get(f"{BASE}/videos/archive").json(), [])
 
     def test_publisher_result_shows_on_the_draft(self):
         client = self.ready_client()
@@ -467,7 +471,7 @@ class PostDraftTests(DraftTestBase):
         self.write_captions()
         self.assertEqual([m["tag"] for m in sent], ["drafts-ready"])
         self.assertIn("3", sent[0]["body"])
-        self.assertTrue(sent[0]["url"].endswith("/dashboard/schedule/"))
+        self.assertTrue(sent[0]["url"].endswith("/dashboard/posts/"))
         draft = self.drafts(client)[0]
         client.post(f"{BASE}/drafts/{draft['id']}/caption")      # إعادة كتابة نص واحد: إشعار واحد أيضاً
         self.write_captions()
@@ -480,6 +484,182 @@ class PostDraftTests(DraftTestBase):
         self.assertIn("تجهيز الفيديو", sent[-1]["body"])
         self.render_all()
         self.assertEqual(len(sent), 3)                               # الفاشلة لا تُشعر مرة أخرى
+
+
+class SinglePostTests(DraftTestBase):
+    """المنشور الواحد بمراحله: جدولة، تعديل، موافقة، توليد، نشر. توليد فيديو واحد = جدولة منشور واحد،
+    فتُطبَّق عليه قيود النشر كأي مسودة (لا نشر فوري)."""
+
+    def create(self, client, scheduled_at=None):
+        body = {} if scheduled_at is None else {"scheduled_at": scheduled_at}
+        res = client.post(f"{BASE}/drafts/one", json=body)
+        self.assertEqual(res.status_code, 201, res.text)
+        return res.json()
+
+    def ready_post(self, client):
+        draft = self.create(client)
+        self.write_captions()
+        return next(d for d in self.drafts(client) if d["id"] == draft["id"])
+
+    def media_videos(self):
+        with self.Session() as db:
+            return db.query(models.Media).filter_by(media_type="video").count()
+
+    # ───── ١. الجدولة ─────
+
+    def test_one_post_goes_to_the_earliest_allowed_slot(self):
+        client = self.ready_client()
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-12T11:00:00Z")   # بعد ساعة
+        first = self.create(client)
+        self.assertEqual((first["status"], first["scheduled_at"]), ("writing", "2026-11-12T11:00:00Z"))
+        self.assertEqual(first["planned_at"], first["scheduled_at"])
+        self.assertLessEqual(len(first["images"]), 6)
+        # الثاني بعد 3 ساعات، والثالث في اليوم التالي بتوقيت الجزائر (منشوران في اليوم)
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T14:00:00Z")
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T23:00:00Z")
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T02:00:00Z")
+        with self.Session() as db:
+            self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)    # لا توليد قبل الموافقة
+            self.assertEqual(db.query(models.Post).count(), 0)
+
+    def test_earliest_slot_rounds_up_to_a_quarter_hour(self):
+        self.now = NOW + timedelta(minutes=7)
+        client = self.ready_client()
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T11:15:00Z")
+
+    def test_chosen_time_follows_the_publishing_rules(self):
+        client = self.ready_client()
+        self.assertEqual(self.create(client, "2026-11-12T18:00:00Z")["scheduled_at"], "2026-11-12T18:00:00Z")
+        for when, reason in (("2026-11-12T10:30:00Z", "ساعة"), ("2026-11-12T19:30:00Z", "3 ساعات")):
+            res = client.post(f"{BASE}/drafts/one", json={"scheduled_at": when})
+            self.assertEqual(res.status_code, 422, when)
+            self.assertIn(reason, res.json()["detail"])
+        self.assertEqual(client.post(f"{BASE}/drafts/one", json={"scheduled_at": "2026-11-12T18:00:00"}).status_code, 422)
+
+    def test_needs_activity_and_images_like_any_post(self):
+        client = self.ready_client(images=0)
+        res = client.post(f"{BASE}/drafts/one", json={})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("ارفع صوراً", res.json()["detail"])
+
+    # ───── ٢. التعديل ─────
+
+    def test_content_can_be_edited_before_approval(self):
+        client = self.ready_client(images=8)
+        draft = self.ready_post(client)
+        images = [item["id"] for item in client.get(f"{BASE}/media?media_type=image").json()]
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={
+            "template": "cards_15", "audio": "b.mp3", "image_ids": images[:3], "caption": "  نصي  ",
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+        body = res.json()
+        self.assertEqual((body["template"], body["audio"], body["caption"], body["status"]),
+                         ("cards_15", "b.mp3", "نصي", "ready"))
+        self.assertEqual([image["id"] for image in body["images"]], images[:3])
+        # بلا صوت، وتغيير القالب وحده يقصّ الصور إلى حدّه
+        body = client.patch(f"{BASE}/drafts/{draft['id']}", json={"audio": None}).json()
+        self.assertIsNone(body["audio"])
+        client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "dynamic_15", "image_ids": images[:8]})
+        body = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "quick_7"}).json()
+        self.assertEqual([image["id"] for image in body["images"]], images[:6])
+
+    def test_rejects_content_that_cannot_be_rendered(self):
+        mine = self.ready_client(1, "111", images=7)
+        other = self.ready_client(2, "222", images=1)
+        draft = self.ready_post(mine)
+        own = [item["id"] for item in mine.get(f"{BASE}/media?media_type=image").json()]
+        foreign = other.get(f"{BASE}/media?media_type=image").json()[0]["id"]
+        path = f"{BASE}/drafts/{draft['id']}"
+        for body, code in (
+            ({"template": "nope"}, 422),
+            ({"image_ids": []}, 422),
+            ({"image_ids": [own[0], own[0]]}, 422),
+            ({"template": "quick_7", "image_ids": own[:7]}, 422),         # quick_7 يأخذ 6 صور على الأكثر
+            ({"image_ids": [own[0], foreign]}, 404),
+            ({"audio": "missing.mp3"}, 422),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(mine.patch(path, json=body).status_code, code)
+        self.assertEqual(self.drafts(mine)[0]["images"], draft["images"])
+
+    def test_earliest_reschedules_to_the_nearest_allowed_time(self):
+        client = self.ready_client()
+        draft = self.create(client, "2026-11-20T18:00:00Z")
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"earliest": True})
+        self.assertEqual(res.json()["scheduled_at"], "2026-11-12T11:00:00Z")
+
+    # ───── ٣-٥. الموافقة ثم التوليد ثم النشر، والتعديل بعدها ─────
+
+    def approve(self, client, draft_id):
+        res = client.post(f"{BASE}/drafts/approve", json={"ids": [draft_id]})
+        self.assertEqual(res.status_code, 200, res.text)
+
+    def test_editing_an_approved_post_sends_it_back_for_review(self):
+        client = self.ready_client()
+        draft = self.ready_post(client)
+        self.approve(client, draft["id"])           # موعده بعد ساعة: يُطلب فيديوه فوراً
+        self.assertEqual(self.drafts(client)[0]["status"], "rendering")
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"caption": "تعديل"})
+        self.assertEqual(res.status_code, 422)       # يُجهَّز الآن: يُعدَّل بعد دقيقة
+        self.assertIn("يُجهَّز", res.json()["detail"])
+
+        self.render_all()
+        scheduled = self.drafts(client)[0]
+        self.assertEqual(scheduled["status"], "scheduled")
+        self.assertIsNotNone(scheduled["video_url"])
+        self.assertEqual(self.media_videos(), 1)
+
+        other = "detail_7" if draft["template"] != "detail_7" else "cinematic_7"   # القالب الأول عشوائي
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": other})
+        self.assertEqual(res.status_code, 200, res.text)
+        body = res.json()
+        self.assertEqual((body["status"], body["approved_at"], body["video_url"]), ("ready", None, None))
+        self.assertEqual(self.media_videos(), 0)     # الفيديو القديم لا يمثل المحتوى الجديد
+        with self.Session() as db:
+            self.assertEqual(db.query(models.Post).one().status, PostStatus.ARCHIVED)
+            self.assertEqual(db.query(models.PostDraftApproval).count(), 1)
+
+        self.approve(client, draft["id"])
+        self.render_all()
+        again = self.drafts(client)[0]
+        self.assertEqual((again["status"], again["template"]), ("scheduled", other))
+        with self.Session() as db:
+            self.assertEqual(db.query(models.PostDraftApproval).count(), 2)
+            live = db.query(models.Post).filter(models.Post.status == PostStatus.APPROVED).one()
+            self.assertEqual(live.scheduled_at, datetime(2026, 11, 12, 11, 0))
+
+    def test_unchanged_content_keeps_the_approval(self):
+        client = self.ready_client()
+        draft = self.ready_post(client)
+        self.approve(client, draft["id"])
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": draft["template"]})
+        self.assertEqual(res.status_code, 422)       # يُجهَّز الآن
+        self.render_all()
+        body = client.patch(f"{BASE}/drafts/{draft['id']}", json={
+            "template": draft["template"], "caption": draft["caption"],
+        }).json()
+        self.assertEqual(body["status"], "scheduled")
+
+    def test_new_caption_for_an_approved_post_sends_it_back_for_review(self):
+        client = self.ready_client()
+        draft = self.create(client, "2026-11-20T18:00:00Z")   # بعيد: لا يُطلب فيديوه بعد
+        self.write_captions()
+        self.approve(client, draft["id"])
+        res = client.post(f"{BASE}/drafts/{draft['id']}/caption")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual((res.json()["status"], res.json()["approved_at"]), ("writing", None))
+
+    def test_published_post_cannot_be_edited(self):
+        client = self.ready_client()
+        draft = self.ready_post(client)
+        self.approve(client, draft["id"])
+        self.render_all()
+        with self.Session() as db:
+            db.query(models.Post).update({"status": PostStatus.PUBLISHED})
+            db.commit()
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"caption": "متأخر"})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("نُشر", res.json()["detail"])
 
 
 class SlotRuleTests(unittest.TestCase):

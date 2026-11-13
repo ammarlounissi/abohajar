@@ -48,7 +48,7 @@ TEST_MESSAGE_TITLE = "الإشعارات تعمل"
 class Message:
     title: str
     body: str
-    page: str = ""          # القسم في لوحة الخدمة: "" للرئيسية، "schedule" للمجدول، "publish" للنشر اليدوي
+    page: str = ""          # القسم في لوحة الخدمة: "" للرئيسية، "posts" لقائمة المنشورات
     tag: str = ""           # إشعار بالوسم نفسه يحل محل السابق على الجهاز بدل أن يتراكم
     ttl: int = 24 * 3600    # كم تحتفظ به خدمة الدفع إن كان الجهاز مطفأً
 
@@ -281,11 +281,11 @@ async def notify_async(db: Session, factory_id: int, message: Message) -> int:
 
 def drafts_ready(count: int) -> Message:
     return Message("مسوداتك جاهزة للمراجعة", f"عدد المسودات بانتظار موافقتك: {count}. لا يُنشر شيء قبل أن توافق.",
-                   page="schedule", tag="drafts-ready")
+                   page="posts", tag="drafts-ready")
 
 
 def draft_failed(draft_id: int, reason: str) -> Message:
-    return Message("منشور مجدول يحتاج انتباهك", reason, page="schedule", tag=f"draft-{draft_id}")
+    return Message("منشور مجدول يحتاج انتباهك", reason, page="posts", tag=f"draft-{draft_id}")
 
 
 def _excerpt(text: Optional[str], limit: int = 90) -> str:
@@ -294,8 +294,8 @@ def _excerpt(text: Optional[str], limit: int = 90) -> str:
 
 
 def _post_section(scheduled: bool) -> str:
-    """قسم اللوحة الذي يُفتح من إشعار منشور: المجدول، أو «نشر الفيديو» حيث يُنشر الفيديو يدوياً ويُتابَع."""
-    return "schedule" if scheduled else "publish"
+    """قسم اللوحة الذي يُفتح من إشعار منشور: قائمة المنشورات (كل نشر صار عبرها)."""
+    return "posts"
 
 
 def post_published(post_id: int, caption: Optional[str], scheduled: bool) -> Message:

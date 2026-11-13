@@ -174,7 +174,7 @@ class PushDeliveryTests(PushTestBase):
         self.assertEqual(self.notify(), 2)
         self.assertEqual(sorted(e for e, _ in self.sent), [FCM + "a", FCM + "b"])
         payload = self.sent[0][1]
-        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/schedule/")
+        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/posts/")
         self.assertEqual(payload["tag"], "drafts-ready")
         self.assertIn("3", payload["body"])
         self.assertTrue(all(row.last_sent_at for row in self.rows()))
@@ -231,4 +231,4 @@ class PushDeliveryTests(PushTestBase):
         payload = self.sent[-1][1]
         self.assertEqual(payload["title"], "نُشر منشورك على صفحتك")
         self.assertEqual(payload["body"], "خبز الدار ساخن كل صباح")
-        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/publish/")
+        self.assertEqual(payload["url"], f"/services/{SERVICE}/dashboard/posts/")

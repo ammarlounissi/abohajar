@@ -536,11 +536,6 @@ class CustomerVideoRequest(BaseModel):
         return (value.strip() or None) if isinstance(value, str) else value
 
 
-class CustomerPublishRequest(BaseModel):
-    """نص المنشور المرافق للفيديو (اختياري)."""
-    caption: str = Field(default="", max_length=2200)
-
-
 class CustomerVideoPost(BaseModel):
     """حالة نشر فيديو على صفحة الزبون. scheduled: منشور مجدول ينتظر موعده. unknown: بقي قيد النشر أكثر من المهلة ولا نعرف هل نُشر.
     error رسالة للزبون، وerror_detail النص التقني كما جاء (للدعم). media_id فارغ إن حُذف الفيديو من المكتبة."""
@@ -649,14 +644,13 @@ class CustomerVideoJob(BaseModel):
     error: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
-    media_id: Optional[int] = None      # الفيديو الناتج في المكتبة (بعد النجاح، وما لم يُحذف)
 
 
 CustomerVideoState = Literal["ready", "scheduled", "publishing", "published", "failed", "unknown"]
 
 
 class CustomerVideoItem(BaseModel):
-    """فيديو في مكتبة الصفحة مع حالته. ready: لم يُنشر ولم يُجدول بعد؛ والباقي حالة آخر منشور له (post).
+    """فيديو قديم في أرشيف الصفحة (لا يتبع منشوراً) مع حالته. ready: لم يُنشر؛ والباقي حالة آخر نشر يدوي له (post).
     template وduration وcreated_at من مهمة التوليد التي صنعته (فارغة لفيديو بلا مهمة معروفة)."""
     id: int
     url: str
@@ -665,14 +659,6 @@ class CustomerVideoItem(BaseModel):
     duration: Optional[float] = None
     created_at: Optional[datetime] = None
     post: Optional[CustomerVideoPost] = None
-
-
-class CustomerVideoLibrary(BaseModel):
-    """مكتبة فيديوهات الصفحة، الأحدث أولاً. counts: عدد كل حالة ومعها all. generating: التوليد الجاري إن وُجد."""
-    videos: List[CustomerVideoItem]
-    counts: Dict[str, int]
-    generating: Optional[CustomerVideoJob] = None
-    max_videos: int
 
 
 # --- النشر الجماعي المجدول: مسودات تُراجع ويُوافق عليها قبل الرندرة والنشر ---
@@ -717,9 +703,26 @@ class CustomerDraftRules(BaseModel):
 
 
 class CustomerDrafts(BaseModel):
-    """مسودات الصفحة ومنشوراتها المجدولة، الأقرب موعداً أولاً."""
+    """منشورات الصفحة بكل مراحلها، الأقرب موعداً أولاً. next_slot: أقرب موعد مسموح لمنشور جديد (فارغ إن لم يوجد)."""
     drafts: List[CustomerDraft]
     rules: CustomerDraftRules
+    next_slot: Optional[datetime] = None
+
+
+def _require_timezone(value):
+    if value is not None and value.tzinfo is None:
+        raise ValueError("الموعد يُرسل بمنطقته الزمنية، مثل 2026-11-20T19:00:00Z")
+    return value
+
+
+class CustomerDraftCreate(BaseModel):
+    """منشور واحد (المرحلة الأولى: الجدولة). بلا scheduled_at يُجدول في أقرب موعد مسموح."""
+    scheduled_at: Optional[datetime] = None
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def require_timezone(cls, value):
+        return _require_timezone(value)
 
 
 class CustomerDraftsRequest(BaseModel):
@@ -729,16 +732,20 @@ class CustomerDraftsRequest(BaseModel):
 
 
 class CustomerDraftUpdate(BaseModel):
-    """caption: قبل الموافقة فقط. scheduled_at: بمنطقة زمنية (مثل ...Z)، ويُقبل قبل النشر."""
+    """المحتوى (caption, template, audio, image_ids بترتيب الفيديو): حتى يبدأ النشر، وتعديله بعد الموافقة يعيد
+    المنشور «بانتظار الموافقة». audio: null = بلا صوت. scheduled_at بمنطقة زمنية (مثل ...Z)، أو earliest=true
+    لأقرب موعد مسموح؛ تغيير الموعد لا يُلغي الموافقة."""
     caption: Optional[str] = Field(default=None, max_length=2200)
+    template: Optional[str] = Field(default=None, max_length=40)
+    audio: Optional[str] = Field(default=None, max_length=120)
+    image_ids: Optional[List[int]] = Field(default=None, max_length=30)
     scheduled_at: Optional[datetime] = None
+    earliest: Optional[bool] = None
 
     @field_validator("scheduled_at")
     @classmethod
     def require_timezone(cls, value):
-        if value is not None and value.tzinfo is None:
-            raise ValueError("الموعد يُرسل بمنطقته الزمنية، مثل 2026-11-20T19:00:00Z")
-        return value
+        return _require_timezone(value)
 
 
 class CustomerDraftsApproval(BaseModel):

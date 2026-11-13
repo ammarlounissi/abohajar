@@ -32,7 +32,7 @@ from app.core.database import SessionLocal
 from app.core.time import utc_now
 from app.models import DeliveryStatus, PostApproval, PostStatus
 from app.services import (
-    customer_captions, customer_workspaces, facebook_services, factory_video_jobs, ollama_chat,
+    customer_captions, customer_workspaces, facebook_services, factory_video_jobs, media_library, ollama_chat,
     post_publisher, push_notifications, video_maker,
 )
 from app.services.errors import InvalidInputError, NotFoundError, ServiceError
@@ -150,6 +150,28 @@ def plan_slots(count: int, at: time, occupied: Iterable[datetime], now: Optional
     return slots
 
 
+SLOT_STEP = timedelta(minutes=15)
+
+
+def earliest_slot(occupied: Iterable[datetime], now: Optional[datetime] = None) -> datetime:
+    """أقرب موعد (UTC) يحترم قيود الجدولة: بعد ساعة على الأقل، على رأس ربع ساعة، بلا تجاوز حد اليوم ولا تقارب.
+    هو «انشر في أقرب وقت» بعد إلغاء النشر الفوري."""
+    now = now or utc_now()
+    occupied = list(occupied)
+    start = now + MIN_LEAD
+    candidate = start.replace(second=0, microsecond=0)
+    if candidate < start:
+        candidate += timedelta(minutes=1)
+    candidate += timedelta(minutes=(-candidate.minute) % 15)
+    while candidate <= now + MAX_AHEAD:
+        try:
+            check_slot(candidate, occupied, now)
+            return candidate
+        except InvalidInputError:
+            candidate += SLOT_STEP
+    raise InvalidInputError(f"لا يوجد موعد متاح في حدود {MAX_AHEAD.days} يوماً")
+
+
 # ───── التوليد ─────
 
 def _rotation(items: list, count: int) -> list:
@@ -183,16 +205,14 @@ def _count_pending(db: Session, factory_id: int) -> int:
     ).count()
 
 
-def generate(db: Session, user_id: int, service_key: str, *, count: int, at: str) -> dict:
-    """ينشئ count مسودة بقوالب وأصوات وصور متناوبة ومواعيد يومية، ويبدأ كتابة نصوصها بـ Gemini واحداً بعد واحد."""
+def _prepare(db: Session, user_id: int, service_key: str, count: int) -> tuple:
+    """ما يلزم قبل إنشاء count منشوراً: نشاط الصفحة (منه يُكتب النص)، وصور المكتبة، ومكان بين المسودات."""
     workspace = customer_workspaces.current_workspace(db, user_id, service_key)
     factory = workspace.factory
     customer_captions._fill_activity_from_facebook(db, user_id, service_key, factory)
     if not (factory.activity or "").strip():
         raise InvalidInputError("اكتب نشاط صفحتك في «إعدادات الصفحة» أولاً: منه يكتب الذكاء الاصطناعي النصوص")
-    image_ids = [row[0] for row in db.query(models.Media.id).filter(
-        models.Media.factory_id == factory.id, models.Media.media_type == "image",
-    ).order_by(models.Media.id)]
+    image_ids = _library_images(db, factory.id)
     if not image_ids:
         raise InvalidInputError("ارفع صوراً إلى المكتبة أولاً لتُبنى منها الفيديوهات")
     pending = _count_pending(db, factory.id)
@@ -202,19 +222,52 @@ def generate(db: Session, user_id: int, service_key: str, *, count: int, at: str
             f"لديك {pending} مسودة بانتظار المراجعة. راجعها أو احذف بعضها أولاً"
             + (f"، أو اطلب {left} على الأكثر." if left > 0 else ".")
         )
-    hour, minute = (int(part) for part in at.split(":"))
-    slots = plan_slots(count, time(hour, minute), _occupied(db, factory.id))
+    return factory, image_ids
+
+
+def _library_images(db: Session, factory_id: int) -> List[int]:
+    return [row[0] for row in db.query(models.Media.id).filter(
+        models.Media.factory_id == factory_id, models.Media.media_type == "image",
+    ).order_by(models.Media.id)]
+
+
+def _new_drafts(db: Session, factory: models.Factory, user_id: int, image_ids: List[int], slots: List[datetime]) -> list:
+    """مسودات بقوالب وأصوات وصور متناوبة في المواعيد slots، تبدأ بكتابة نصوصها (writing)."""
+    count = len(slots)
     templates = _rotation(list(video_maker.VIDEO_TEMPLATES), count)
     audio = _rotation(video_maker.list_audio_files(), count) or [None] * count
     images = _image_sets(image_ids, [template.max_images for template in templates])
-    for index in range(count):
-        db.add(models.PostDraft(
+    drafts = [
+        models.PostDraft(
             factory_id=factory.id, user_id=user_id, status=WRITING, template=templates[index].id,
             audio=audio[index], image_ids=images[index], scheduled_at=slots[index], planned_at=slots[index],
-        ))
+        )
+        for index in range(count)
+    ]
+    db.add_all(drafts)
     db.commit()
     advance_captions(db, factory.id)
+    return drafts
+
+
+def generate(db: Session, user_id: int, service_key: str, *, count: int, at: str) -> dict:
+    """ينشئ count مسودة بقوالب وأصوات وصور متناوبة ومواعيد يومية، ويبدأ كتابة نصوصها بـ Gemini واحداً بعد واحد."""
+    factory, image_ids = _prepare(db, user_id, service_key, count)
+    hour, minute = (int(part) for part in at.split(":"))
+    _new_drafts(db, factory, user_id, image_ids, plan_slots(count, time(hour, minute), _occupied(db, factory.id)))
     return list_drafts(db, user_id, service_key, advance=False)
+
+
+def create_one(db: Session, user_id: int, service_key: str, *, scheduled_at: Optional[datetime] = None) -> dict:
+    """المرحلة الأولى من المنشور الواحد (الجدولة): مسودة بموعد يختاره الزبون، أو بأقرب موعد مسموح بلا موعد.
+    قالبها وصوتها وصورها عشوائية ونصها يُكتب، ثم يعدّلها الزبون ويوافق عليها كأي مسودة."""
+    factory, image_ids = _prepare(db, user_id, service_key, 1)
+    occupied = _occupied(db, factory.id)
+    when = _as_utc(scheduled_at) if scheduled_at is not None else earliest_slot(occupied)
+    check_slot(when, occupied)
+    draft = _new_drafts(db, factory, user_id, image_ids, [when])[0]
+    db.refresh(draft)
+    return _one(db, user_id, service_key, draft)
 
 
 # ───── التقدم بالمسودات (متكرر الأمان) ─────
@@ -441,7 +494,15 @@ def list_drafts(db: Session, user_id: int, service_key: str, *, advance: bool = 
     images = dict(db.query(models.Media.id, models.Media.url).filter(
         models.Media.factory_id == factory_id, models.Media.id.in_(wanted),
     )) if wanted else {}
-    return {"drafts": [_view(draft, images, workspace.page_id) for draft in drafts], "rules": rules()}
+    try:
+        next_slot = earliest_slot(_occupied(db, factory_id))
+    except InvalidInputError:
+        next_slot = None
+    return {
+        "drafts": [_view(draft, images, workspace.page_id) for draft in drafts],
+        "rules": rules(),
+        "next_slot": _utc(next_slot),
+    }
 
 
 def _draft(db: Session, factory_id: int, draft_id: int) -> models.PostDraft:
@@ -489,20 +550,95 @@ def _reschedule(db: Session, draft: models.PostDraft, when: datetime, user_id: i
         _record_approval(db, draft, user_id, page_id, utc_now())
 
 
+CONTENT_FIELDS = ("caption", "template", "audio", "image_ids")
+
+
+def _check_editable(draft: models.PostDraft) -> None:
+    """محتوى المنشور يُعدَّل حتى يبدأ نشره، إلا أثناء كتابة النص أو تجهيز الفيديو (لحظات)."""
+    post = draft.post
+    if post is not None and post.status in (PostStatus.PUBLISHING, PostStatus.PUBLISHED):
+        raise InvalidInputError("نُشر هذا المنشور أو هو قيد النشر الآن؛ لا يتغير محتواه")
+    if draft.status == WRITING:
+        raise InvalidInputError("انتظر حتى ينتهي الذكاء الاصطناعي من كتابة النص")
+    if draft.status in (RENDERING, _FINALIZING):
+        raise InvalidInputError("يُجهَّز فيديو هذا المنشور الآن. انتظر دقيقة ثم عدّله.")
+
+
+def _drop_video(db: Session, draft: models.PostDraft) -> None:
+    """يحذف الفيديو المولَّد لمسودة لم يُنشر: محتواها تغيّر فلم يعد يمثلها (ولا يبقى يتيماً في الأرشيف)."""
+    job = draft.video_job
+    if job is None or not job.video_url:
+        return
+    media = db.query(models.Media).filter(
+        models.Media.factory_id == draft.factory_id, models.Media.url == job.video_url,
+    ).first()
+    if media is not None:
+        media_library.delete_factory_media(db, draft.factory_id, media.id)
+
+
+def _reopen(db: Session, draft: models.PostDraft) -> None:
+    """تعديل محتوى منشور بعد الموافقة: تُلغى الموافقة (سجلها يبقى) ويُوقف منشوره ويُحذف فيديوه،
+    فيعود «بانتظار الموافقة». ما يُنشر هو دائماً ما وافق عليه الزبون آخر مرة."""
+    if draft.post is not None:
+        draft.post.status = PostStatus.ARCHIVED       # الناشر لا يلمس المؤرشف
+    _drop_video(db, draft)
+    draft.status, draft.approved_at, draft.approved_by, draft.error = READY, None, None, None
+    draft.video_job, draft.post = None, None
+
+
+def _content(db: Session, draft: models.PostDraft, changes: dict) -> dict:
+    """القيم الجديدة للمحتوى بعد التحقق منها. تغيير القالب وحده يقصّ الصور إلى حدّه."""
+    template = video_maker.get_video_template(changes.get("template") or draft.template)
+    result: dict = {}
+    if "template" in changes and changes["template"] is not None:
+        result["template"] = template.id
+    if "image_ids" in changes and changes["image_ids"] is not None:
+        ids = list(changes["image_ids"])
+        if not ids:
+            raise InvalidInputError("اختر صورة واحدة على الأقل")
+        if len(set(ids)) != len(ids):
+            raise InvalidInputError("الصورة الواحدة تُختار مرة واحدة")
+        if len(ids) > template.max_images:
+            raise InvalidInputError(f"هذا القالب يأخذ {template.max_images} صورة على الأكثر")
+        found = db.query(models.Media.id).filter(
+            models.Media.factory_id == draft.factory_id, models.Media.media_type == "image",
+            models.Media.id.in_(ids),
+        ).count()
+        if found != len(ids):
+            raise NotFoundError("بعض الصور المختارة غير موجودة في مكتبتك؛ حدّث الصفحة واختر من جديد")
+        result["image_ids"] = ids
+    elif "template" in result:
+        result["image_ids"] = list(draft.image_ids or [])[: template.max_images]
+    if "audio" in changes:
+        audio = changes["audio"] or None
+        if audio is not None and audio not in video_maker.list_audio_files():
+            raise InvalidInputError("ملف الصوت غير متاح؛ اختر صوتاً من القائمة")
+        result["audio"] = audio
+    if changes.get("caption") is not None:
+        result["caption"] = changes["caption"].strip()
+    return {key: value for key, value in result.items() if getattr(draft, key) != value}
+
+
 def update_draft(
     db: Session, user_id: int, service_key: str, draft_id: int, changes: dict,
 ) -> dict:
-    """caption: قبل الموافقة فقط (ما وُوفق عليه هو ما يُنشر). scheduled_at: قبل النشر، بقيود الجدولة."""
+    """المحتوى (caption, template, audio, image_ids): حتى يبدأ النشر؛ تعديله بعد الموافقة يعيد المنشور
+    «بانتظار الموافقة». scheduled_at (أو earliest = أقرب موعد مسموح): قبل النشر، بقيود الجدولة، ولا يُلغي الموافقة."""
     workspace = customer_workspaces.current_workspace(db, user_id, service_key)
     draft = _draft(db, workspace.factory_id, draft_id)
-    if changes.get("caption") is not None:
-        if draft.status != READY:
-            raise InvalidInputError(
-                "لا يتغير نص منشور وافقت عليه. احذفه وولّد غيره، أو انتظر انتهاء كتابة النص."
-                if draft.approved_at else "انتظر حتى ينتهي الذكاء الاصطناعي من كتابة النص"
-            )
-        draft.caption, draft.caption_error = changes["caption"].strip(), None
-    if changes.get("scheduled_at") is not None:
+    if any(key in changes for key in CONTENT_FIELDS):
+        _check_editable(draft)
+        content = _content(db, draft, changes)
+        if content and draft.status != READY:
+            _reopen(db, draft)
+        for key, value in content.items():
+            setattr(draft, key, value)
+        if "caption" in content:
+            draft.caption_error = None
+    if changes.get("earliest"):
+        when = earliest_slot(_occupied(db, draft.factory_id, exclude_draft=draft.id))
+        _reschedule(db, draft, when, user_id, workspace.page_id)
+    elif changes.get("scheduled_at") is not None:
         _reschedule(db, draft, _as_utc(changes["scheduled_at"]), user_id, workspace.page_id)
     db.commit()
     advance_renders(db, workspace.factory_id)
@@ -511,11 +647,12 @@ def update_draft(
 
 
 def rewrite_caption(db: Session, user_id: int, service_key: str, draft_id: int) -> dict:
-    """يطلب نصاً جديداً من Gemini لمسودة لم يُوافق عليها بعد."""
+    """يطلب نصاً جديداً من Gemini. لمنشور وافق عليه: يعود «بانتظار الموافقة» كأي تعديل للمحتوى."""
     workspace = customer_workspaces.current_workspace(db, user_id, service_key)
     draft = _draft(db, workspace.factory_id, draft_id)
+    _check_editable(draft)
     if draft.status != READY:
-        raise InvalidInputError("لا يُعاد كتابة نص منشور وافقت عليه أو ما زال نصه يُكتب")
+        _reopen(db, draft)
     draft.status, draft.caption_job_id, draft.caption_error = WRITING, None, None
     db.commit()
     advance_captions(db, workspace.factory_id)
@@ -560,6 +697,7 @@ def restore_draft(db: Session, user_id: int, service_key: str, draft_id: int) ->
     if needs_text:
         draft.caption_job_id = None
     draft.approved_at = draft.approved_by = draft.cancelled_at = draft.error = None
+    _drop_video(db, draft)
     draft.video_job, draft.post = None, None
     db.commit()
     advance_captions(db, factory_id)
