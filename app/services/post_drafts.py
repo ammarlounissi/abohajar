@@ -151,11 +151,19 @@ def plan_slots(count: int, at: time, occupied: Iterable[datetime], now: Optional
 
 
 SLOT_STEP = timedelta(minutes=15)
+# «أقرب موعد» يُقترح في ساعات النهار فقط (بتوقيت الصفحة): لا يُقترح النشر في منتصف الليل لأن اليوم امتلأ.
+# الموعد الذي يختاره الزبون بنفسه لا يتقيد بها.
+DAY_START, DAY_END = time(8, 0), time(22, 0)
+
+
+def _in_daytime(moment: datetime) -> bool:
+    local = moment.replace(tzinfo=timezone.utc).astimezone(tz()).time()
+    return DAY_START <= local <= DAY_END
 
 
 def earliest_slot(occupied: Iterable[datetime], now: Optional[datetime] = None) -> datetime:
-    """أقرب موعد (UTC) يحترم قيود الجدولة: بعد ساعة على الأقل، على رأس ربع ساعة، بلا تجاوز حد اليوم ولا تقارب.
-    هو «انشر في أقرب وقت» بعد إلغاء النشر الفوري."""
+    """أقرب موعد (UTC) يحترم قيود الجدولة: بعد ساعة على الأقل، على رأس ربع ساعة، بين 08:00 و22:00 بتوقيت
+    الصفحة، بلا تجاوز حد اليوم ولا تقارب. هو «انشر في أقرب وقت» بعد إلغاء النشر الفوري."""
     now = now or utc_now()
     occupied = list(occupied)
     start = now + MIN_LEAD
@@ -164,11 +172,13 @@ def earliest_slot(occupied: Iterable[datetime], now: Optional[datetime] = None) 
         candidate += timedelta(minutes=1)
     candidate += timedelta(minutes=(-candidate.minute) % 15)
     while candidate <= now + MAX_AHEAD:
-        try:
-            check_slot(candidate, occupied, now)
-            return candidate
-        except InvalidInputError:
-            candidate += SLOT_STEP
+        if _in_daytime(candidate):
+            try:
+                check_slot(candidate, occupied, now)
+                return candidate
+            except InvalidInputError:
+                pass
+        candidate += SLOT_STEP
     raise InvalidInputError(f"لا يوجد موعد متاح في حدود {MAX_AHEAD.days} يوماً")
 
 

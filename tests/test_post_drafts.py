@@ -514,13 +514,23 @@ class SinglePostTests(DraftTestBase):
         self.assertEqual((first["status"], first["scheduled_at"]), ("writing", "2026-11-12T11:00:00Z"))
         self.assertEqual(first["planned_at"], first["scheduled_at"])
         self.assertLessEqual(len(first["images"]), 6)
-        # الثاني بعد 3 ساعات، والثالث في اليوم التالي بتوقيت الجزائر (منشوران في اليوم)
+        # الثاني بعد 3 ساعات، والثالث في اليوم التالي بتوقيت الجزائر (منشوران في اليوم) من الساعة 08:00
+        # لا من منتصف الليل، والرابع بعده بـ 3 ساعات
         self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T14:00:00Z")
-        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T23:00:00Z")
-        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T02:00:00Z")
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-13T07:00:00Z")
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T10:00:00Z")
         with self.Session() as db:
             self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)    # لا توليد قبل الموافقة
             self.assertEqual(db.query(models.Post).count(), 0)
+
+    def test_earliest_slot_is_in_daytime(self):
+        self.now = datetime(2026, 11, 12, 21, 30)          # 22:30 بتوقيت الجزائر
+        client = self.ready_client()
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-13T07:00:00Z")   # 08:00 صباحاً
+        self.now = datetime(2026, 11, 12, 19, 30)          # 20:30: بعد ساعة = 21:30، قبل 22:00
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-12T20:30:00Z")
+        # الموعد الذي يختاره الزبون بنفسه لا يتقيد بساعات النهار
+        self.assertEqual(self.create(client, "2026-11-12T22:30:00Z")["scheduled_at"], "2026-11-12T22:30:00Z")
 
     def test_earliest_slot_rounds_up_to_a_quarter_hour(self):
         self.now = NOW + timedelta(minutes=7)
