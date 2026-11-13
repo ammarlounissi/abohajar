@@ -13,7 +13,7 @@ from datetime import timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app import models
@@ -32,8 +32,17 @@ MAX_IMAGES = 200
 # الفيديو المولَّد يُحفظ في المكتبة نفسها (حتى 100 ميغابايت للواحد)، فلعددها سقف: يحذف الزبون ليولّد غيرها.
 MAX_VIDEOS = 20
 _ACTIVE_JOB_STATUSES = ("queued", "running")
-# امتداد الملف -> الصيغة التي يجب أن يكون عليها محتواه فعلاً (كما يتعرّف عليها Pillow).
-IMAGE_FORMATS = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}
+# صيغة المحتوى كما يتعرّف عليها Pillow -> (امتداد الملف المحفوظ، نوع المحتوى). الصيغة تُعرف من المحتوى لا
+# من اسم الملف: الهواتف ترسل أسماء بلا امتداد (منتقي Android) أو بامتداد لا يطابق (صورة PNG محفوظة باسم .jpg).
+# MPO = JPEG متعدد الصور تحفظه كاميرات Android بوضع البورتريه أو الحركة باسم .jpg؛ يُحفظ JPEG عادياً بصورته الأولى.
+IMAGE_FORMATS = {
+    "JPEG": (".jpg", "image/jpeg"), "MPO": (".jpg", "image/jpeg"),
+    "PNG": (".png", "image/png"), "WEBP": (".webp", "image/webp"),
+}
+IMAGE_EXTENSIONS = (".jpeg", ".jpg", ".png", ".webp")      # لمنتقي الملفات في الواجهة
+IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp")
+_HEIF_BRANDS = (b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1", b"avif")
+_EXIF_ORIENTATION, _EXIF_GPS = 0x0112, 0x8825
 
 
 def _page_id(channel: models.SocialChannel) -> str:
@@ -100,7 +109,8 @@ def describe(db: Session, user_id: int, service_key: str) -> dict:
         "videos_count": _count(db, workspace.factory_id, "video"),
         "max_images": MAX_IMAGES,
         "max_image_bytes": MAX_IMAGE_BYTES,
-        "image_extensions": sorted(IMAGE_FORMATS),
+        "image_extensions": list(IMAGE_EXTENSIONS),
+        "image_types": list(IMAGE_TYPES),
     }
 
 
@@ -114,16 +124,46 @@ def list_media(
     )
 
 
-def _read_image(file: BinaryIO, extension: str) -> bytes:
-    """يقرأ الملف كله (بسقف الحجم) ويتحقق أن محتواه صورة فعلاً بالصيغة التي يدّعيها امتداده."""
-    expected = IMAGE_FORMATS.get(extension)
-    if expected is None:
-        raise InvalidInputError("الصيغ المقبولة: JPG وPNG وWebP")
+def _is_heif(data: bytes, extension: str, content_type: Optional[str]) -> bool:
+    """صور HEIC/HEIF (آيفون وبعض هواتف Samsung): لا يقرؤها Pillow دون مكتبة إضافية."""
+    if extension in (".heic", ".heif", ".avif") or (content_type or "").lower() in ("image/heic", "image/heif", "image/avif"):
+        return True
+    return data[4:8] == b"ftyp" and data[8:12] in _HEIF_BRANDS
+
+
+def _needs_rewrite(image: Image.Image) -> bool:
+    """صورة JPEG فيها اتجاه EXIF أو موقع GPS، أو MPO: تُعاد كتابتها. غير ذلك يُحفظ كما رُفع."""
+    if image.format == "MPO":
+        return True
+    if image.format != "JPEG":
+        return False
+    exif = image.getexif()
+    return exif.get(_EXIF_ORIENTATION, 1) != 1 or _EXIF_GPS in exif
+
+
+def _rewrite_jpeg(image: Image.Image) -> bytes:
+    """الصورة الأولى مُدارة كما تعرضها الكاميرا، بلا بيانات EXIF (لا اتجاه ولا موقع: الرابط عام)."""
+    image.seek(0)
+    upright = ImageOps.exif_transpose(image)
+    if upright.mode not in ("RGB", "L"):
+        upright = upright.convert("RGB")
+    buffer = io.BytesIO()
+    upright.save(buffer, "JPEG", quality=92, icc_profile=image.info.get("icc_profile"))
+    return buffer.getvalue()
+
+
+def _read_image(file: BinaryIO, extension: str, content_type: Optional[str] = None) -> tuple[bytes, str, str]:
+    """يقرأ الملف كله (بسقف الحجم) ويتحقق أن محتواه صورة مقبولة. يرجع (البيانات، الامتداد، نوع المحتوى)
+    من المحتوى نفسه، بعد تصحيح اتجاه صور الكاميرا وإزالة موقعها."""
     data = file.read(MAX_IMAGE_BYTES + 1)
     if not data:
         raise InvalidInputError("لا يمكن رفع ملف فارغ")
     if len(data) > MAX_IMAGE_BYTES:
         raise InvalidInputError("حجم الصورة يتجاوز الحد الأقصى (20 ميغابايت)")
+    if _is_heif(data, extension, content_type):
+        raise InvalidInputError(
+            "صور HEIC غير مقبولة بعد. حوّل الصورة إلى JPG، أو اضبط كاميرا الهاتف على الصيغة «الأكثر توافقاً»."
+        )
     try:
         with Image.open(io.BytesIO(data)) as image:
             image_format = image.format
@@ -131,26 +171,34 @@ def _read_image(file: BinaryIO, extension: str) -> bytes:
             image.verify()
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         raise InvalidInputError("الملف ليس صورة صالحة") from exc
-    if image_format != expected:
-        raise InvalidInputError("محتوى الملف لا يطابق امتداده")
+    if image_format not in IMAGE_FORMATS:
+        raise InvalidInputError("الصيغ المقبولة: JPG وPNG وWebP")
     if pixels > MAX_IMAGE_PIXELS:
         raise InvalidInputError("أبعاد الصورة أكبر من الحد المسموح")
-    return data
+    saved_extension, saved_type = IMAGE_FORMATS[image_format]
+    try:
+        with Image.open(io.BytesIO(data)) as image:     # verify() يُغلق الصورة، فتُفتح من جديد
+            if _needs_rewrite(image):
+                data = _rewrite_jpeg(image)
+    except (OSError, SyntaxError, ValueError) as exc:
+        raise InvalidInputError("الملف ليس صورة صالحة") from exc
+    return data, saved_extension, saved_type
 
 
 def upload_image(
     db: Session, user_id: int, service_key: str, *, file: BinaryIO, filename: Optional[str],
     content_type: Optional[str], description: Optional[str],
 ) -> models.Media:
-    """يرفع صورة إلى مكتبة صفحة الزبون. أشد من رفع الإدارة: صور فقط، يُفحص محتواها، وبسقف للعدد."""
+    """يرفع صورة إلى مكتبة صفحة الزبون. أشد من رفع الإدارة: صور فقط، يُفحص محتواها، وبسقف للعدد.
+    اسم الملف ونوعه كما أرسلهما المتصفح لا يُعتمد عليهما (الهواتف تخطئ فيهما)؛ الصيغة من المحتوى."""
     workspace = current_workspace(db, user_id, service_key)
     extension = Path(filename or "").suffix.lower()
-    data = _read_image(file, extension)
+    data, saved_extension, saved_type = _read_image(file, extension, content_type)
     if _count(db, workspace.factory_id, "image") >= MAX_IMAGES:
         raise InvalidInputError(f"بلغت الحد الأقصى لعدد الصور ({MAX_IMAGES}). احذف صوراً لترفع غيرها.")
     return media_library.upload_factory_media(
-        db, workspace.factory_id, file=io.BytesIO(data), filename=f"image{extension}",
-        content_type=content_type, description=description,
+        db, workspace.factory_id, file=io.BytesIO(data), filename=f"image{saved_extension}",
+        content_type=saved_type, description=description,
     )
 
 

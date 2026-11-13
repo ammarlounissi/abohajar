@@ -219,10 +219,10 @@ class CustomerWorkspaceTests(WorkspaceTestBase):
             ("vector.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>", "image/svg+xml"),   # صيغة غير مقبولة
             ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"),                            # فيديو
             ("fake.png", b"<script>alert(1)</script>", "image/png"),                           # ليس صورة
-            ("renamed.png", image_bytes("JPEG"), "image/png"),                                 # المحتوى يخالف الامتداد
             ("empty.png", b"", "image/png"),
-            ("noext", image_bytes(), "image/png"),
+            ("photo.heic", b"\x00\x00\x00\x18ftypheic" + b"\x00" * 32, "image/heic"),        # صيغة غير مقبولة
         ]
+        # صورة باسم لا يطابق محتواها أو بلا امتداد تُقبل: الصيغة تُعرف من المحتوى (tests/test_multi_device.py)
         for name, data, content_type in cases:
             with self.subTest(name=name):
                 self.assertEqual(self.upload(client, name, data, content_type).status_code, 422)
