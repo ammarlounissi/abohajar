@@ -151,19 +151,11 @@ def plan_slots(count: int, at: time, occupied: Iterable[datetime], now: Optional
 
 
 SLOT_STEP = timedelta(minutes=15)
-# «أقرب موعد» يُقترح في ساعات النهار فقط (بتوقيت الصفحة): لا يُقترح النشر في منتصف الليل لأن اليوم امتلأ.
-# الموعد الذي يختاره الزبون بنفسه لا يتقيد بها.
-DAY_START, DAY_END = time(8, 0), time(22, 0)
-
-
-def _in_daytime(moment: datetime) -> bool:
-    local = moment.replace(tzinfo=timezone.utc).astimezone(tz()).time()
-    return DAY_START <= local <= DAY_END
 
 
 def earliest_slot(occupied: Iterable[datetime], now: Optional[datetime] = None) -> datetime:
-    """أقرب موعد (UTC) يحترم قيود الجدولة: بعد ساعة على الأقل، على رأس ربع ساعة، بين 08:00 و22:00 بتوقيت
-    الصفحة، بلا تجاوز حد اليوم ولا تقارب. هو «انشر في أقرب وقت» بعد إلغاء النشر الفوري."""
+    """أقرب موعد (UTC) يحترم قيود الجدولة: بعد ساعة على الأقل (على رأس ربع ساعة)، ما لم يبلغ اليوم منشورين
+    وكان بعيداً 3 ساعات عن كل منشور، في أي ساعة. هو «انشر في أقرب وقت» بعد إلغاء النشر الفوري."""
     now = now or utc_now()
     occupied = list(occupied)
     start = now + MIN_LEAD
@@ -172,12 +164,11 @@ def earliest_slot(occupied: Iterable[datetime], now: Optional[datetime] = None) 
         candidate += timedelta(minutes=1)
     candidate += timedelta(minutes=(-candidate.minute) % 15)
     while candidate <= now + MAX_AHEAD:
-        if _in_daytime(candidate):
-            try:
-                check_slot(candidate, occupied, now)
-                return candidate
-            except InvalidInputError:
-                pass
+        try:
+            check_slot(candidate, occupied, now)
+            return candidate
+        except InvalidInputError:
+            pass
         candidate += SLOT_STEP
     raise InvalidInputError(f"لا يوجد موعد متاح في حدود {MAX_AHEAD.days} يوماً")
 
@@ -192,9 +183,34 @@ def _rotation(items: list, count: int) -> list:
     return result[:count]
 
 
+def images_label(count: int) -> str:
+    """عدد الصور بصيغته العربية: صورة واحدة، صورتان، 3–10 صور، 11 صورة فما فوق."""
+    if count == 1:
+        return "صورة واحدة"
+    if count == 2:
+        return "صورتان"
+    return f"{count} صور" if 3 <= count <= 10 else f"{count} صورة"
+
+
+# عدد صور المنشور = عدد صور قالبه دائماً (طلب المستخدم 2026-11-13، كتطبيقات الفيديو من القوالب): لا تُحذف صورة
+# بل تُستبدل. القالب الذي يحتاج صوراً أكثر مما في المكتبة لا يُختار.
+MIN_IMAGES = min(template.max_images for template in video_maker.VIDEO_TEMPLATES)
+
+
+def _fitting_templates(library_size: int) -> list:
+    return [template for template in video_maker.VIDEO_TEMPLATES if template.max_images <= library_size]
+
+
+def _needs_more_images(library_size: int) -> InvalidInputError:
+    return InvalidInputError(
+        f"في مكتبتك {images_label(library_size)}، وأقصر قالب يحتاج {images_label(MIN_IMAGES)}. "
+        "ارفع صوراً أكثر إلى المكتبة أولاً"
+    )
+
+
 def _image_sets(image_ids: List[int], sizes: List[int]) -> List[List[int]]:
     """صور كل مسودة: تُؤخذ تباعاً من سلسلة خلطات للمكتبة، فتتوزع الصور على المسودات ولا تتشابه المتتالية.
-    إن كانت المكتبة أصغر من القالب أخذت المسودة كل الصور بترتيب عشوائي."""
+    القوالب تُختار بقدر المكتبة، فتأخذ كل مسودة عدد صور قالبها كاملاً."""
     sets, stream = [], []
     for size in sizes:
         size = min(size, len(image_ids))
@@ -225,6 +241,8 @@ def _prepare(db: Session, user_id: int, service_key: str, count: int) -> tuple:
     image_ids = _library_images(db, factory.id)
     if not image_ids:
         raise InvalidInputError("ارفع صوراً إلى المكتبة أولاً لتُبنى منها الفيديوهات")
+    if len(image_ids) < MIN_IMAGES:
+        raise _needs_more_images(len(image_ids))
     pending = _count_pending(db, factory.id)
     if pending + count > MAX_OPEN:
         left = MAX_OPEN - pending
@@ -244,7 +262,7 @@ def _library_images(db: Session, factory_id: int) -> List[int]:
 def _new_drafts(db: Session, factory: models.Factory, user_id: int, image_ids: List[int], slots: List[datetime]) -> list:
     """مسودات بقوالب وأصوات وصور متناوبة في المواعيد slots، تبدأ بكتابة نصوصها (writing)."""
     count = len(slots)
-    templates = _rotation(list(video_maker.VIDEO_TEMPLATES), count)
+    templates = _rotation(_fitting_templates(len(image_ids)), count)
     audio = _rotation(video_maker.list_audio_files(), count) or [None] * count
     images = _image_sets(image_ids, [template.max_images for template in templates])
     drafts = [
@@ -361,8 +379,15 @@ def _schedule_post(db: Session, draft: models.PostDraft, video_url: str) -> None
     if channel_id is None:
         _fail(db, draft, NO_PAGE_MESSAGE)
         return
+    # الصورة الأولى في ترتيب المسودة غلاف الريل: تُحفظ بعد رابط الفيديو، ويرفعها محوّل فيسبوك في thumb
+    cover = None
+    if draft.image_ids:
+        cover = db.query(models.Media.url).filter(
+            models.Media.factory_id == draft.factory_id, models.Media.id == draft.image_ids[0],
+        ).scalar()
     post = models.Post(
-        factory_id=draft.factory_id, media_type="reel", media_urls=[video_url], description=draft.caption,
+        factory_id=draft.factory_id, media_type="reel", media_urls=[video_url] + ([cover] if cover else []),
+        description=draft.caption,
         status=PostStatus.APPROVED, approval=PostApproval.APPROVED, approved_at=draft.approved_at,
         scheduled_at=draft.scheduled_at,
     )
@@ -596,20 +621,31 @@ def _reopen(db: Session, draft: models.PostDraft) -> None:
     draft.video_job, draft.post = None, None
 
 
+def _fill_images(db: Session, draft: models.PostDraft, current: List[int], count: int) -> List[int]:
+    """صور القالب الجديد: الحالية حتى عدده، وما نقص يُملأ بصور عشوائية من المكتبة غير مستعملة في المنشور."""
+    kept = list(current)[:count]
+    rest = [media_id for media_id in _library_images(db, draft.factory_id) if media_id not in kept]
+    if len(kept) + len(rest) < count:
+        raise InvalidInputError(
+            f"هذا القالب يحتاج {images_label(count)}، وفي مكتبتك {images_label(len(kept) + len(rest))}. "
+            "ارفع صوراً أكثر أو اختر قالباً أقصر"
+        )
+    return kept + random.sample(rest, count - len(kept))
+
+
 def _content(db: Session, draft: models.PostDraft, changes: dict) -> dict:
-    """القيم الجديدة للمحتوى بعد التحقق منها. تغيير القالب وحده يقصّ الصور إلى حدّه."""
+    """القيم الجديدة للمحتوى بعد التحقق منها. الصور بعدد صور القالب تماماً؛ تغيير القالب وحده يقصّها إلى عدده
+    أو يكملها بصور عشوائية من المكتبة."""
     template = video_maker.get_video_template(changes.get("template") or draft.template)
     result: dict = {}
     if "template" in changes and changes["template"] is not None:
         result["template"] = template.id
     if "image_ids" in changes and changes["image_ids"] is not None:
         ids = list(changes["image_ids"])
-        if not ids:
-            raise InvalidInputError("اختر صورة واحدة على الأقل")
         if len(set(ids)) != len(ids):
             raise InvalidInputError("الصورة الواحدة تُختار مرة واحدة")
-        if len(ids) > template.max_images:
-            raise InvalidInputError(f"هذا القالب يأخذ {template.max_images} صورة على الأكثر")
+        if len(ids) != template.max_images:
+            raise InvalidInputError(f"هذا القالب يأخذ {images_label(template.max_images)} بالضبط")
         found = db.query(models.Media.id).filter(
             models.Media.factory_id == draft.factory_id, models.Media.media_type == "image",
             models.Media.id.in_(ids),
@@ -618,7 +654,7 @@ def _content(db: Session, draft: models.PostDraft, changes: dict) -> dict:
             raise NotFoundError("بعض الصور المختارة غير موجودة في مكتبتك؛ حدّث الصفحة واختر من جديد")
         result["image_ids"] = ids
     elif "template" in result:
-        result["image_ids"] = list(draft.image_ids or [])[: template.max_images]
+        result["image_ids"] = _fill_images(db, draft, draft.image_ids or [], template.max_images)
     if "audio" in changes:
         audio = changes["audio"] or None
         if audio is not None and audio not in video_maker.list_audio_files():
@@ -735,6 +771,9 @@ def approve(db: Session, user_id: int, service_key: str, ids: List[int]) -> dict
         when = draft.scheduled_at.replace(tzinfo=timezone.utc).astimezone(tz()).strftime("%Y-%m-%d %H:%M")
         if not (draft.caption or "").strip():
             raise InvalidInputError(f"منشور {when} بلا نص. اكتب نصه أو احذفه ثم وافق.")
+        needed = video_maker.get_video_template(draft.template).max_images
+        if len(draft.image_ids or []) != needed:
+            raise InvalidInputError(f"منشور {when} قالبه يأخذ {images_label(needed)}. افتحه وأكمل صوره ثم وافق.")
         if draft.scheduled_at < now + MIN_LEAD:
             raise InvalidInputError(f"موعد منشور {when} فات أو قريب جداً. غيّره ثم وافق.")
     for draft in drafts:

@@ -4,13 +4,52 @@
 - رمز القناة المحفوظ معها (channel_token): صفحة ربطها زبون عبر Facebook Login. رمز الإدارة لا يصل إليها.
 - رمز مستخدم النظام (META_ACCESS_TOKEN) يُستخرج به رمز الصفحة: صفحات الإدارة.
 إن وُجد رمز القناة يُجرَّب أولاً، وإن رفضه فيسبوك كرمز غير صالح يُجرَّب رمز النظام مرة واحدة
-(صفحة للإدارة حُفظ معها رمز قديم)."""
+(صفحة للإدارة حُفظ معها رمز قديم).
+
+غلاف الريل: إن حمل المنشور رابطاً ثانياً بعد الفيديو (media_urls[1]) فهو صورة الغلاف، تُنزَّل وتُحوَّل إلى JPEG
+وتُرفع مع الفيديو في الحقل thumb. تعذّر تنزيلها، أو رفض فيسبوك الطلب بسببها، لا يمنع النشر: يُنشر بلا غلاف."""
+import asyncio
+import io
+import logging
 from typing import Optional
+
+import httpx
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import settings
 from app.models import ReportKind
 from app.services.social.base import Publisher, PublishError, is_http_url
 from app.services.social.graph import graph_call, make_client
+
+logger = logging.getLogger(__name__)
+
+COVER_MAX_BYTES = 15 * 1024 * 1024
+COVER_MAX_SIDE = 1920
+
+
+def _cover_jpeg(content: bytes) -> bytes:
+    """صورة الغلاف بصيغة JPEG، باتجاهها الصحيح، وأطول ضلع فيها COVER_MAX_SIDE على الأكثر."""
+    with Image.open(io.BytesIO(content)) as image:
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((COVER_MAX_SIDE, COVER_MAX_SIDE))
+        out = io.BytesIO()
+        image.save(out, "JPEG", quality=90)
+        return out.getvalue()
+
+
+async def fetch_cover(client: httpx.AsyncClient, url: str) -> Optional[bytes]:
+    """غلاف الريل جاهزاً للرفع، أو None إن تعذّر (يُنشر الفيديو بلا غلاف)."""
+    if not is_http_url(url):
+        return None
+    try:
+        response = await client.get(url, follow_redirects=True)
+        if response.status_code >= 400 or len(response.content) > COVER_MAX_BYTES:
+            logger.warning("cover skipped: %s (http %s, %d bytes)", url, response.status_code, len(response.content))
+            return None
+        return await asyncio.to_thread(_cover_jpeg, response.content)
+    except (httpx.HTTPError, UnidentifiedImageError, OSError) as exc:
+        logger.warning("cover skipped: %s (%s)", url, exc)
+        return None
 
 
 class FacebookPublisher(Publisher):
@@ -72,10 +111,21 @@ class FacebookPublisher(Publisher):
                 client, "POST", f"{page}/photos", token=token,
                 data={"url": post.media_urls[0], "caption": caption},
             )
-        return await graph_call(   # reel
-            client, "POST", f"{page}/videos", token=token,
-            data={"file_url": post.media_urls[0], "description": caption},
-        )
+        data = {"file_url": post.media_urls[0], "description": caption}   # reel
+        cover = await fetch_cover(client, post.media_urls[1]) if len(post.media_urls) > 1 else None
+        if cover is not None:
+            try:
+                return await graph_call(
+                    client, "POST", f"{page}/videos", token=token, data=data,
+                    files={"thumb": ("cover.jpg", cover, "image/jpeg")},
+                )
+            except PublishError as exc:
+                # الشبكة والرمز وحد الطلبات ليست من الغلاف: يُعاد الخطأ كما هو. غير ذلك قد يكون رفضاً للغلاف،
+                # فلا ينشأ الفيديو، ويُعاد الطلب بلا غلاف حتى لا يفوت المنشور موعده.
+                if exc.kind in (ReportKind.NETWORK, ReportKind.TOKEN, ReportKind.LIMIT):
+                    raise
+                logger.warning("reel with cover rejected, retrying without it: %s", exc)
+        return await graph_call(client, "POST", f"{page}/videos", token=token, data=data)
 
     async def _publish(self, post) -> str:
         timeout = self.VIDEO_TIMEOUT if post.media_type == "reel" else 60.0

@@ -20,11 +20,13 @@ async def graph_call(
     token: str,
     data: Optional[dict] = None,
     params: Optional[dict] = None,
+    files: Optional[dict] = None,
 ) -> dict:
+    """files: ملفات تُرفع مع الطلب (multipart)، مثل غلاف الفيديو {"thumb": (name, bytes, type)}."""
     url = f"{settings.graph_url}/{path.lstrip('/')}"
     try:
         response = await client.request(
-            method, url, data=data, params=params, headers={"Authorization": f"Bearer {token}"},
+            method, url, data=data, params=params, files=files, headers={"Authorization": f"Bearer {token}"},
         )
     except httpx.HTTPError as exc:      # انتهاء المهلة أو انقطاع الاتصال
         raise PublishError(ReportKind.NETWORK, f"{type(exc).__name__}: {exc}") from exc

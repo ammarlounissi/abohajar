@@ -59,7 +59,7 @@ class DraftTestBase(WorkspaceTestBase):
 
     # ───── أدوات ─────
 
-    def ready_client(self, user_id=1, page_id="111", images=3, activity="مخبزة: خبز تقليدي وحلويات"):
+    def ready_client(self, user_id=1, page_id="111", images=4, activity="مخبزة: خبز تقليدي وحلويات"):
         self.link(user_id, page_id=page_id)
         client = self.client(user_id)
         for _ in range(images):
@@ -309,7 +309,8 @@ class PostDraftTests(DraftTestBase):
             self.assertEqual(post.status, PostStatus.APPROVED)
             self.assertEqual(post.description, drafts[0]["caption"])
             self.assertEqual(iso(post.scheduled_at).replace("+00:00", "Z"), first["scheduled_at"].replace("+00:00", "Z"))
-            self.assertEqual(post.media_urls, [first["video_url"]])
+            # الفيديو ثم غلافه: الصورة الأولى في ترتيب المسودة
+            self.assertEqual(post.media_urls, [first["video_url"], first["images"][0]["url"]])
             self.assertEqual(len(post.deliveries), 1)
             due = [p.id for p in db.query(models.Post).filter(models.Post.scheduled_at <= self.now)]
             self.assertEqual(due, [])                 # الناشر لا ينشره قبل موعده
@@ -514,23 +515,22 @@ class SinglePostTests(DraftTestBase):
         self.assertEqual((first["status"], first["scheduled_at"]), ("writing", "2026-11-12T11:00:00Z"))
         self.assertEqual(first["planned_at"], first["scheduled_at"])
         self.assertLessEqual(len(first["images"]), 6)
-        # الثاني بعد 3 ساعات، والثالث في اليوم التالي بتوقيت الجزائر (منشوران في اليوم) من الساعة 08:00
-        # لا من منتصف الليل، والرابع بعده بـ 3 ساعات
+        # الثاني بعد 3 ساعات، والثالث أول اليوم التالي بتوقيت الجزائر (منشوران في اليوم) في أي ساعة:
+        # 00:00 لا 08:00، والرابع بعده بـ 3 ساعات
         self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T14:00:00Z")
-        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-13T07:00:00Z")
-        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T10:00:00Z")
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T23:00:00Z")
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T02:00:00Z")
         with self.Session() as db:
             self.assertEqual(db.query(models.FactoryVideoJob).count(), 0)    # لا توليد قبل الموافقة
             self.assertEqual(db.query(models.Post).count(), 0)
 
-    def test_earliest_slot_is_in_daytime(self):
-        self.now = datetime(2026, 11, 12, 21, 30)          # 22:30 بتوقيت الجزائر
+    def test_earliest_slot_is_one_hour_from_now_at_any_hour(self):
+        self.now = datetime(2026, 11, 12, 21, 30)          # 22:30 بتوقيت الجزائر: بعد ساعة = 23:30، لا الغد 08:00
         client = self.ready_client()
-        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-13T07:00:00Z")   # 08:00 صباحاً
-        self.now = datetime(2026, 11, 12, 19, 30)          # 20:30: بعد ساعة = 21:30، قبل 22:00
-        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-12T20:30:00Z")
-        # الموعد الذي يختاره الزبون بنفسه لا يتقيد بساعات النهار
-        self.assertEqual(self.create(client, "2026-11-12T22:30:00Z")["scheduled_at"], "2026-11-12T22:30:00Z")
+        self.assertEqual(self.create(client)["scheduled_at"], "2026-11-12T22:30:00Z")
+        # منشور بعد أقل من 3 ساعات يدفع أقرب موعد إلى ما بعده بـ 3 ساعات
+        self.now = datetime(2026, 11, 12, 20, 0)
+        self.assertEqual(client.get(f"{BASE}/drafts").json()["next_slot"], "2026-11-13T01:30:00Z")
 
     def test_earliest_slot_rounds_up_to_a_quarter_hour(self):
         self.now = NOW + timedelta(minutes=7)
@@ -552,26 +552,61 @@ class SinglePostTests(DraftTestBase):
         self.assertEqual(res.status_code, 422)
         self.assertIn("ارفع صوراً", res.json()["detail"])
 
+    def test_library_needs_the_shortest_template_count(self):
+        client = self.ready_client(images=3)
+        res = client.post(f"{BASE}/drafts/one", json={})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("أقصر قالب يحتاج 4 صور", res.json()["detail"])
+
+    def test_new_posts_use_only_templates_the_library_can_fill(self):
+        client = self.ready_client(images=4)
+        for _ in range(3):
+            self.create(client)
+        with self.Session() as db:
+            for draft in db.query(models.PostDraft):
+                self.assertIn(draft.template, ("cinematic_7", "detail_7"))        # القالبان اللذان يأخذان 4 صور
+                self.assertEqual(len(draft.image_ids), 4)
+
     # ───── ٢. التعديل ─────
 
     def test_content_can_be_edited_before_approval(self):
-        client = self.ready_client(images=8)
+        client = self.ready_client(images=9)
         draft = self.ready_post(client)
         images = [item["id"] for item in client.get(f"{BASE}/media?media_type=image").json()]
+        chosen = images[::-1][:8]
         res = client.patch(f"{BASE}/drafts/{draft['id']}", json={
-            "template": "cards_15", "audio": "b.mp3", "image_ids": images[:3], "caption": "  نصي  ",
+            "template": "cards_15", "audio": "b.mp3", "image_ids": chosen, "caption": "  نصي  ",
         })
         self.assertEqual(res.status_code, 200, res.text)
         body = res.json()
         self.assertEqual((body["template"], body["audio"], body["caption"], body["status"]),
                          ("cards_15", "b.mp3", "نصي", "ready"))
-        self.assertEqual([image["id"] for image in body["images"]], images[:3])
-        # بلا صوت، وتغيير القالب وحده يقصّ الصور إلى حدّه
+        self.assertEqual([image["id"] for image in body["images"]], chosen)
         body = client.patch(f"{BASE}/drafts/{draft['id']}", json={"audio": None}).json()
         self.assertIsNone(body["audio"])
-        client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "dynamic_15", "image_ids": images[:8]})
+        # تغيير القالب وحده: إلى أقصر يقصّ الصور إلى عدده، وإلى أطول يكملها بصور عشوائية غير مستعملة
         body = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "quick_7"}).json()
-        self.assertEqual([image["id"] for image in body["images"]], images[:6])
+        self.assertEqual([image["id"] for image in body["images"]], chosen[:6])
+        body = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "dynamic_15"}).json()
+        ids = [image["id"] for image in body["images"]]
+        self.assertEqual((len(ids), len(set(ids)), ids[:6]), (9, 9, chosen[:6]))
+        self.assertEqual(set(ids), set(images))
+        # قالب يحتاج صوراً أكثر مما في المكتبة يُرفض ولا يتغير شيء
+        res = client.patch(f"{BASE}/drafts/{draft['id']}", json={"template": "dynamic_30"})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("يحتاج 15 صورة، وفي مكتبتك 9 صور", res.json()["detail"])
+        self.assertEqual(self.drafts(client)[0]["template"], "dynamic_15")
+
+    def test_post_with_fewer_images_than_its_template_is_not_approved(self):
+        client = self.ready_client(images=4)
+        draft = self.ready_post(client)
+        with self.Session() as db:
+            row = db.get(models.PostDraft, draft["id"])
+            row.image_ids = row.image_ids[:2]          # منشور قديم أو صورة حُذفت من المكتبة
+            db.commit()
+        res = client.post(f"{BASE}/drafts/approve", json={"ids": [draft["id"]]})
+        self.assertEqual(res.status_code, 422)
+        self.assertIn("وأكمل صوره", res.json()["detail"])
 
     def test_rejects_content_that_cannot_be_rendered(self):
         mine = self.ready_client(1, "111", images=7)
@@ -583,9 +618,10 @@ class SinglePostTests(DraftTestBase):
         for body, code in (
             ({"template": "nope"}, 422),
             ({"image_ids": []}, 422),
-            ({"image_ids": [own[0], own[0]]}, 422),
-            ({"template": "quick_7", "image_ids": own[:7]}, 422),         # quick_7 يأخذ 6 صور على الأكثر
-            ({"image_ids": [own[0], foreign]}, 404),
+            ({"template": "quick_7", "image_ids": [own[0]] * 6}, 422),
+            ({"template": "quick_7", "image_ids": own[:7]}, 422),         # quick_7 يأخذ 6 صور بالضبط
+            ({"template": "quick_7", "image_ids": own[:5]}, 422),         # لا أقل
+            ({"template": "cinematic_7", "image_ids": own[:3] + [foreign]}, 404),
             ({"audio": "missing.mp3"}, 422),
         ):
             with self.subTest(body=body):

@@ -207,7 +207,7 @@ class MultiDeviceTests(DraftTestBase):
     def test_post_scheduled_on_the_phone_is_edited_and_approved_on_the_desktop(self):
         """منشور واحد (توليد فيديو واحد) بمراحله: يُجدول من الهاتف، ويُعدَّل ويُوافق عليه من الحاسوب،
         ويأخذ الهاتف بعده أقرب موعد تالٍ (القيود على الصفحة لا على الجهاز)."""
-        for _ in range(2):
+        for _ in range(4):
             self.upload(self.phone)
         self.assertEqual(self.desktop.patch(f"{BASE}/profile", json={"activity": "مخبزة"}).status_code, 200)
         created = self.phone.post(f"{BASE}/drafts/one", json={})
@@ -232,7 +232,7 @@ class MultiDeviceTests(DraftTestBase):
     # ───── النشر المجدول ─────
 
     def test_drafts_generated_on_one_device_are_reviewed_on_the_other(self):
-        for _ in range(3):
+        for _ in range(4):
             self.upload(self.phone)
         self.phone.patch(f"{BASE}/profile", json={"activity": "مخبزة: خبز تقليدي"})
         self.generate(self.desktop, count=2)
